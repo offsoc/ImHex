@@ -242,10 +242,21 @@ void TextEditor::DeleteRange(const Coordinates &aStart, const Coordinates &aEnd)
     mTextChanged = true;
 }
 
-int TextEditor::InsertTextAt(Coordinates & /* inout */ aWhere, const char *aValue) {
+void TextEditor::AppendLine(const std::string &aValue) {
+    if (mLines.size() != 1 || !mLines[0].empty())
+        mLines.push_back(Line());
+    Coordinates lastLine = {( int )mLines.size() - 1, 0};
+    InsertTextAt(lastLine, aValue);
+    SetCursorPosition({( int )mLines.size() - 1, 0});
+    EnsureCursorVisible();
+    mTextChanged = true;
+}
+
+int TextEditor::InsertTextAt(Coordinates & /* inout */ aWhere, const std::string &aValueString) {
     int cindex     = GetCharacterIndex(aWhere);
     int totalLines = 0;
-    while (*aValue != '\0') {
+    auto aValue = aValueString.begin();
+    while (aValue != aValueString.end()) {
         if (mLines.empty()) {
             mLines.push_back(Line());
             mTextChanged = true;
@@ -279,10 +290,15 @@ int TextEditor::InsertTextAt(Coordinates & /* inout */ aWhere, const char *aValu
             cindex         = 0;
             ++totalLines;
             ++aValue;
+        } else if (*aValue == 0) {
+            auto &line = mLines[aWhere.mLine];
+            line.insert(line.begin() + cindex++, Glyph('.', PaletteIndex::Default));
+            ++aWhere.mColumn;
+            ++aValue;
         } else {
             auto &line = mLines[aWhere.mLine];
             auto d     = UTF8CharLength(*aValue);
-            while (d-- > 0 && *aValue != '\0')
+            while (d-- > 0 && aValue != aValueString.end())
                 line.insert(line.begin() + cindex++, Glyph(*aValue++, PaletteIndex::Default));
             ++aWhere.mColumn;
         }
@@ -847,13 +863,6 @@ void TextEditor::HandleMouseInputs() {
     }
 }
 
-int TextEditor::GetLongestLineLength() const {
-    int result = 0;
-    for (int i = 0; i < (int)mLines.size(); i++)
-        result = std::max(result, GetLineCharacterCount(i));
-    return result;
-}
-
 inline void TextUnformattedColoredAt(const ImVec2 &pos, const ImU32 &color, const char *text) {
     ImGui::SetCursorScreenPos(pos);
     ImGui::PushStyleColor(ImGuiCol_Text,color);
@@ -913,7 +922,6 @@ void TextEditor::RenderText(const char *aTitle, const ImVec2 &lineNumbersStartPo
     float  globalLineMax    = mLines.size();
     auto lineMax       = std::clamp(lineNo + mNumberOfLinesDisplayed, 0.0F, globalLineMax-1.0F);
     int totalDigitCount = std::floor(std::log10(globalLineMax)) + 1;
-    mLongest = GetLongestLineLength() * mCharAdvance.x;
 
     // Deduce mTextStart by evaluating mLines size (global lineMax) plus two spaces as text width
     char buf[16];
@@ -1184,9 +1192,9 @@ void TextEditor::RenderText(const char *aTitle, const ImVec2 &lineNumbersStartPo
         ImGui::BeginChild(aTitle);
 
     if (mShowLineNumbers)
-        ImGui::Dummy(ImVec2(mLongest, (globalLineMax - lineMax - 2.0F) * mCharAdvance.y + ImGui::GetCurrentWindow()->InnerClipRect.GetHeight()));
+        ImGui::Dummy(ImVec2(mLongestLineLength * mCharAdvance.x, (globalLineMax - lineMax - 2.0F) * mCharAdvance.y + ImGui::GetCurrentWindow()->InnerClipRect.GetHeight()));
     else
-        ImGui::Dummy(ImVec2(mLongest, (globalLineMax - 1.0f - lineMax + GetPageSize() - 1.0f ) * mCharAdvance.y - 2 * ImGuiStyle().WindowPadding.y));
+        ImGui::Dummy(ImVec2(mLongestLineLength * mCharAdvance.x, (globalLineMax - 1.0f - lineMax + GetPageSize() - 1.0f ) * mCharAdvance.y - 2 * ImGuiStyle().WindowPadding.y));
 
     if (mScrollToCursor)
         EnsureCursorVisible();
@@ -1247,8 +1255,7 @@ void TextEditor::Render(const char *aTitle, const ImVec2 &aSize, bool aBorder) {
 
     ImVec2 textEditorSize = aSize;
     textEditorSize.x -=  mLineNumberFieldWidth;
-    mLongest        = GetLongestLineLength() * mCharAdvance.x;
-    bool scroll_x = mLongest > textEditorSize.x;
+    bool scroll_x = mLongestLineLength * mCharAdvance.x > textEditorSize.x;
     bool scroll_y = mLines.size() > 1;
     if (!aBorder && scroll_y)
         textEditorSize.x -= scrollBarSize;
@@ -1596,7 +1603,7 @@ void TextEditor::InsertText(const char *aValue) {
     int totalLines = pos.mLine - start.mLine;
     auto text = PreprocessText(aValue);
 
-    totalLines += InsertTextAt(pos, text.c_str());
+    totalLines += InsertTextAt(pos, text);
 
     SetSelection(pos, pos);
     SetCursorPosition(pos);
@@ -3128,7 +3135,7 @@ void TextEditor::UndoRecord::Undo(TextEditor *aEditor) {
 
     if (!mRemoved.empty()) {
         auto start = mRemovedStart;
-        aEditor->InsertTextAt(start, mRemoved.c_str());
+        aEditor->InsertTextAt(start, mRemoved);
         aEditor->Colorize(mRemovedStart.mLine - 1, mRemovedEnd.mLine - mRemovedStart.mLine + 2);
     }
 
@@ -3144,7 +3151,7 @@ void TextEditor::UndoRecord::Redo(TextEditor *aEditor) {
 
     if (!mAdded.empty()) {
         auto start = mAddedStart;
-        aEditor->InsertTextAt(start, mAdded.c_str());
+        aEditor->InsertTextAt(start, mAdded);
         aEditor->Colorize(mAddedStart.mLine - 1, mAddedEnd.mLine - mAddedStart.mLine + 1);
     }
 

@@ -326,17 +326,30 @@ namespace hex::plugin::builtin {
 
         if (ImHexApi::Provider::isValid() && provider->isAvailable()) {
             static float height = 0;
-            static bool dragging = false;
             const ImGuiContext& g = *ImGui::GetCurrentContext();
             if (g.CurrentWindow->Appearing)
                 return;
-            const auto availableSize = g.CurrentWindow->Size;
+            const auto availableSize = ImVec2(g.CurrentWindow->Size.x, g.CurrentWindow->Size.y - 2 * ImGui::GetFrameHeightWithSpacing());
             const auto windowPosition = ImGui::GetCursorScreenPos();
-            auto textEditorSize = availableSize;
-            textEditorSize.y *= 3.5F / 5.0F;
-            textEditorSize.y -= ImGui::GetTextLineHeightWithSpacing();
-            textEditorSize.y = std::clamp(textEditorSize.y + height, 200.0F, availableSize.y - 200.0F);
+            static ImVec2 oldTextEditorSize = ImVec2(0, 0);
+            ImVec2 textEditorSize = ImVec2(availableSize.x, oldTextEditorSize.x == 0 ? availableSize.y * 3.0F / 5.0F : oldTextEditorSize.y);
+            static ImVec2 oldAvailableSize = ImVec2(0, 0);
+            if (availableSize.y != oldAvailableSize.y && oldAvailableSize.y != 0) {
+                float factor = availableSize.y / oldAvailableSize.y;
+                height *= factor;
+            }
 
+            static float oldHeight = 0;
+            auto heightIncrement = height - oldHeight;
+            if (heightIncrement != 0) {
+                float smallestTexEditorHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ScrollbarSize;
+                float largestTextEditorHeight = availableSize.y - ImGui::GetTextLineHeightWithSpacing() - 2 * ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ScrollbarSize;
+                textEditorSize.y = std::clamp(textEditorSize.y + heightIncrement, smallestTexEditorHeight, largestTextEditorHeight);
+            }
+
+            oldAvailableSize = availableSize;
+            oldTextEditorSize = textEditorSize;
+            oldHeight = height;
             if (g.NavWindow != nullptr) {
                 std::string name =  g.NavWindow->Name;
                 if (name.contains(textEditorView) || name.contains(consoleView))
@@ -428,6 +441,7 @@ namespace hex::plugin::builtin {
                 setupGotoLine(editor);
             }
 
+            static bool dragging = false;
             ImGui::Button("##settings_drag_bar", ImVec2(ImGui::GetContentRegionAvail().x, 4_scaled));
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
                 if (ImGui::IsItemHovered())
@@ -1060,27 +1074,17 @@ namespace hex::plugin::builtin {
         }
         if (m_consoleNeedsUpdate) {
             std::scoped_lock lock(m_logMutex);
-            bool skipNewLine = false;
             auto lineCount = m_consoleEditor.GetTextLines().size();
             if (m_console->size() < lineCount || (lineCount == 1 && m_consoleEditor.GetLineText(0).empty())) {
                 m_consoleEditor.SetText("");
                 lineCount = 0;
-                skipNewLine = true;
             }
 
-            m_consoleEditor.JumpToLine(lineCount);
             const auto linesToAdd = m_console->size() - lineCount;
 
-
-            std::string content;
             for (size_t i = 0; i < linesToAdd; i += 1) {
-                if (!skipNewLine)
-                    content += '\n';
-                skipNewLine = false;
-                content += m_console->at(lineCount + i);
+                m_consoleEditor.AppendLine(m_console->at(lineCount + i));
             }
-            m_consoleEditor.InsertText(content);
-
             m_consoleNeedsUpdate = false;
         }
 
@@ -1846,6 +1850,7 @@ namespace hex::plugin::builtin {
 
         ContentRegistry::PatternLanguage::configureRuntime(*m_editorRuntime, nullptr);
         const auto &ast = m_editorRuntime->parseString(code, pl::api::Source::DefaultSource);
+        m_textEditor.SetLongestLineLength(m_editorRuntime->getInternals().preprocessor.get()->getLongestLineLength());
 
         auto &patternVariables = m_patternVariables.get(provider);
         auto oldPatternVariables = std::move(patternVariables);
@@ -1892,6 +1897,7 @@ namespace hex::plugin::builtin {
 
         m_consoleEditor.ClearActionables();
         m_console.get(provider).clear();
+        m_consoleLongestLineLength.get(provider) = 0;
         m_consoleNeedsUpdate = true;
 
         m_sectionWindowDrawer.clear();
@@ -1962,7 +1968,10 @@ namespace hex::plugin::builtin {
                             default: break;
                         }
                     }
-
+                    if (m_consoleLongestLineLength.get(provider) < line.size()) {
+                       m_consoleLongestLineLength.get(provider) = line.size();
+                        m_consoleEditor.SetLongestLineLength(line.size());
+                    }
                     m_console.get(provider).emplace_back(line);
                     m_consoleNeedsUpdate = true;
                 }
@@ -2048,6 +2057,7 @@ namespace hex::plugin::builtin {
                 m_selection.set(m_textEditor.GetSelection(),oldProvider);
                 m_consoleCursorPosition.set(m_consoleEditor.GetCursorPosition(),oldProvider);
                 m_consoleSelection.set(m_consoleEditor.GetSelection(),oldProvider);
+                m_consoleLongestLineLength.set(m_consoleEditor.GetLongestLineLength(),oldProvider);
                 m_breakpoints.set(m_textEditor.GetBreakpoints(),oldProvider);
             }
 
@@ -2059,12 +2069,16 @@ namespace hex::plugin::builtin {
                 m_textEditor.SetBreakpoints(m_breakpoints.get(newProvider));
                 m_consoleEditor.SetText(hex::combineStrings(m_console.get(newProvider), "\n"));
                 m_consoleEditor.SetCursorPosition(m_consoleCursorPosition.get(newProvider));
+                m_consoleEditor.SetLongestLineLength(m_consoleLongestLineLength.get(newProvider));
                 selection = m_consoleSelection.get(newProvider);
                 m_consoleEditor.SetSelection(selection.mStart, selection.mEnd);
             } else {
                 m_textEditor.SetText("");
                 m_consoleEditor.SetText("");
+                m_consoleEditor.SetLongestLineLength(0);
             }
+
+            m_textEditor.SetTextChanged(false);
         });
 
         RequestAddVirtualFile::subscribe(this, [this](const std::fs::path &path, const std::vector<u8> &data, Region region) {
@@ -2088,8 +2102,7 @@ namespace hex::plugin::builtin {
     }
 
     void ViewPatternEditor::appendEditorText(const std::string &text) {
-        m_textEditor.JumpToLine(m_textEditor.GetTotalLines());
-        m_textEditor.InsertText(hex::format("\n{0}", text));
+        m_textEditor.AppendLine(text);
         m_triggerEvaluation = true;
     }
 

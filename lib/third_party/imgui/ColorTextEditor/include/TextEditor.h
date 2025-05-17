@@ -295,6 +295,12 @@ public:
 	void SetText(const std::string& aText);
     void JumpToLine(int line=-1);
     void JumpToCoords(const Coordinates &coords);
+    void SetLongestLineLength(size_t line) {
+        mLongestLineLength = line;
+    }
+    size_t GetLongestLineLength() const {
+        return mLongestLineLength;
+    }
 	std::string GetText() const;
     bool isEmpty() const {
         auto text = GetText();
@@ -380,6 +386,7 @@ public:
 
 	void InsertText(const std::string& aValue);
 	void InsertText(const char* aValue);
+    void AppendLine(const std::string &aValue);
 
 	void MoveUp(int aAmount = 1, bool aSelect = false);
 	void MoveDown(int aAmount = 1, bool aSelect = false);
@@ -544,7 +551,7 @@ private:
 	Coordinates SanitizeCoordinates(const Coordinates& aValue) const;
 	void Advance(Coordinates& aCoordinates) const;
 	void DeleteRange(const Coordinates& aStart, const Coordinates& aEnd);
-	int InsertTextAt(Coordinates& aWhere, const char* aValue);
+	int InsertTextAt(Coordinates& aWhere, const std::string &aValue);
 	void AddUndo(UndoRecord& aValue);
 	Coordinates ScreenPosToCoordinates(const ImVec2& aPosition) const;
 	Coordinates FindWordStart(const Coordinates& aFrom) const;
@@ -555,7 +562,6 @@ private:
 	int GetCharacterColumn(int aLine, int aIndex) const;
 	int GetLineCharacterCount(int aLine) const;
     int Utf8CharsToBytes(const Coordinates &aCoordinates) const;
-    int GetLongestLineLength() const;
     unsigned long long GetLineByteCount(int aLine) const;
 	int GetStringCharacterCount(std::string str) const;
 	int GetLineMaxColumn(int aLine) const;
@@ -594,7 +600,7 @@ private:
 	bool mTextChanged = false;
 	bool mColorizerEnabled = true;
     float mLineNumberFieldWidth = 0.0F;
-    float mLongest = 0.0F;
+    size_t mLongestLineLength = 0;
 	float mTextStart = 20.0F;                   // position (in pixels) where a code line starts relative to the left of the TextEditor.
 	float  mLeftMargin = 10.0;
     float mTopLine = 0.0F;
