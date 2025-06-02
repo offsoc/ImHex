@@ -8,6 +8,7 @@
 
 #include <pl/pattern_language.hpp>
 #include <pl/core/errors/error.hpp>
+#include <pl/core/lexer.hpp>
 
 #include <ui/hex_editor.hpp>
 #include <ui/pattern_drawer.hpp>
@@ -34,18 +35,18 @@ namespace hex::plugin::builtin {
 
     class PatternSourceCode {
     public:
-        const std::string& get(prv::Provider *provider) {
+        const std::string& get(prv::Provider *provider) const {
             if (m_synced)
                 return m_sharedSource;
 
             return m_perProviderSource.get(provider);
         }
 
-        void set(prv::Provider *provider, std::string source) {
-            source = wolv::util::trim(source);
+        std::string& get(prv::Provider *provider) {
+            if (m_synced)
+                return m_sharedSource;
 
-            m_perProviderSource.set(source, provider);
-            m_sharedSource = std::move(source);
+            return m_perProviderSource.get(provider);
         }
 
         bool isSynced() const {
@@ -233,10 +234,10 @@ namespace hex::plugin::builtin {
         std::atomic<u32> m_runningEvaluators = 0;
         std::atomic<u32> m_runningParsers    = 0;
 
-        bool m_hasUnevaluatedChanges = false;
+        PerProvider<bool> m_hasUnevaluatedChanges;
         std::chrono::time_point<std::chrono::steady_clock> m_lastEditorChangeTime;
 
-        TextEditor m_textEditor, m_consoleEditor;
+        PerProvider<TextEditor> m_textEditor, m_consoleEditor;
         std::atomic<bool> m_consoleNeedsUpdate = false;
 
         std::atomic<bool> m_dangerousFunctionCalled = false;
@@ -259,6 +260,8 @@ namespace hex::plugin::builtin {
         PerProvider<TextEditor::Coordinates>  m_cursorPosition;
 
         PerProvider<TextEditor::Coordinates> m_consoleCursorPosition;
+        PerProvider<bool> m_cursorNeedsUpdate;
+        PerProvider<bool> m_consoleCursorNeedsUpdate;
         PerProvider<TextEditor::Selection> m_selection;
         PerProvider<TextEditor::Selection> m_consoleSelection;
         PerProvider<size_t> m_consoleLongestLineLength;
@@ -348,26 +351,51 @@ namespace hex::plugin::builtin {
                 }
             }
 
+            auto createRuntime = [provider] {
+                auto runtime = std::make_shared<pl::PatternLanguage>();
+                ContentRegistry::PatternLanguage::configureRuntime(*runtime, provider);
+
+                return runtime;
+            };
+
             ui::PopupNamedFileChooser::open(
                 basePaths, paths, std::vector<hex::fs::ItemFilter>{ { "Pattern File", "hexpat" } }, false,
-                [this, provider](const std::fs::path &path, const std::fs::path &adjustedPath) mutable -> std::string {
-                    auto it = m_patternNames.find(path);
-                    if (it != m_patternNames.end()) {
+                [this, runtime = createRuntime()](const std::fs::path &path, const std::fs::path &adjustedPath) mutable -> std::string {
+                    if (auto it = m_patternNames.find(path); it != m_patternNames.end()) {
                         return it->second;
                     }
 
                     const auto fileName = wolv::util::toUTF8String(adjustedPath.filename());
                     m_patternNames[path] = fileName;
 
-                    pl::PatternLanguage runtime;
-                    ContentRegistry::PatternLanguage::configureRuntime(runtime, provider);
-                    runtime.addPragma("description", [&](pl::PatternLanguage &, const std::string &value) -> bool {
-                        m_patternNames[path] = hex::format("{} ({})", value, fileName);
-                        return true;
-                    });
-
                     wolv::io::File file(path, wolv::io::File::Mode::Read);
-                    std::ignore = runtime.preprocessString(file.readString(), pl::api::Source::DefaultSource);
+                    pl::api::Source source(file.readString());
+
+                    // Only run the lexer on the source file and manually extract the #pragma description to make this
+                    // process as fast as possible. Running the preprocessor directly takes too much time
+                    auto result = runtime->getInternals().lexer->lex(&source);
+                    if (result.isOk()) {
+                        const auto tokens = result.unwrap();
+                        for (auto it = tokens.begin(); it != tokens.end(); ++it) {
+                            if (it->type == pl::core::Token::Type::Directive && std::get<pl::core::Token::Directive>(it->value) == pl::core::Token::Directive::Pragma) {
+                                ++it;
+                                if (it != tokens.end() && it->type == pl::core::Token::Type::String) {
+                                    auto literal = std::get<pl::core::Token::Literal>(it->value);
+                                    auto string = std::get_if<std::string>(&literal);
+                                    if (string != nullptr && *string == "description") {
+                                        ++it;
+                                        if (it != tokens.end() && it->type == pl::core::Token::Type::String) {
+                                            literal = std::get<pl::core::Token::Literal>(it->value);
+                                            string = std::get_if<std::string>(&literal);
+                                            if (string != nullptr) {
+                                                m_patternNames[path] = hex::format("{} ({})", *string, fileName);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     return m_patternNames[path];
                 },
@@ -379,11 +407,12 @@ namespace hex::plugin::builtin {
         };
 
         std::function<void()> m_exportPatternFile = [this] {
+            auto provider = ImHexApi::Provider::get();
             fs::openFileBrowser(
                     fs::DialogMode::Save, { {"Pattern", "hexpat"} },
-                    [this](const auto &path) {
+                    [this, provider](const auto &path) {
                         wolv::io::File file(path, wolv::io::File::Mode::Create);
-                        file.writeString(wolv::util::trim(m_textEditor.GetText()));
+                        file.writeString(wolv::util::trim(m_textEditor.get(provider).GetText()));
                     }
             );
         };
