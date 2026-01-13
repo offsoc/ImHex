@@ -38,8 +38,14 @@ add_subdirectory(lib/external/libwolv EXCLUDE_FROM_ALL)
 set(LIBPL_ENABLE_CLI OFF CACHE BOOL "" FORCE)
 add_subdirectory(lib/external/pattern_language EXCLUDE_FROM_ALL)
 
+set(IMHEX_PLUGIN_IMPORTED ON)
+
 add_subdirectory(lib/libimhex)
 add_subdirectory(lib/trace)
+add_subdirectory(lib/fonts)
+add_subdirectory(lib/ui)
+
+set(IMHEX_PLUGIN_IMPORTED OFF)
 
 if (WIN32)
     set_target_properties(libimhex PROPERTIES
@@ -59,9 +65,9 @@ elseif (APPLE)
             INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/lib/trace/include")
 else()
     set_target_properties(libimhex PROPERTIES
-            IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../libimhex.so"
+            IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../../../lib/libimhex.so"
             INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/lib/libimhex/include")
     set_target_properties(tracing PROPERTIES
-            IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../libtracing.a"
+            IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/lib/libtracing.a"
             INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/lib/trace/include")
 endif()

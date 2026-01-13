@@ -1,7 +1,10 @@
 #pragma once
 
+#include <hex/api/imhex_api/provider.hpp>
 #include <hex/providers/provider.hpp>
 #include <hex/api/events/events_provider.hpp>
+
+#include <nlohmann/json.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -26,7 +29,7 @@ namespace hex::plugin::builtin {
         [[nodiscard]] bool isResizable() const override { return false; }
         [[nodiscard]] bool isSavable() const override { return false; }
 
-        [[nodiscard]] bool open() override { return true; }
+        [[nodiscard]] OpenResult open() override { return {}; }
         void close() override { }
 
         void readRaw(u64 offset, void *buffer, size_t size) override {
@@ -42,7 +45,10 @@ namespace hex::plugin::builtin {
         [[nodiscard]] u64 getActualSize() const override { return 0x00; }
 
         [[nodiscard]] std::string getName() const override { return "ImHex"; }
-        [[nodiscard]] std::vector<Description> getDataDescription() const override { return { }; }
+
+        [[nodiscard]] const char* getIcon() const override {
+            return "";
+        }
 
         void loadSettings(const nlohmann::json &settings) override { std::ignore = settings; }
         [[nodiscard]] nlohmann::json storeSettings(nlohmann::json settings) const override { return settings; }

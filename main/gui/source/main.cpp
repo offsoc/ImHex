@@ -11,6 +11,8 @@
 
 #include <hex/api/task_manager.hpp>
 #include <hex/api/plugin_manager.hpp>
+#include <hex/helpers/utils.hpp>
+#include <hex/trace/exceptions.hpp>
 
 namespace hex::init {
 
@@ -18,6 +20,7 @@ namespace hex::init {
     void runCommandLine(int argc, char **argv);
 
 }
+
 /**
  * @brief Main entry point of ImHex
  * @param argc Argument count
@@ -29,22 +32,31 @@ int main(int argc, char **argv) {
 
     std::setlocale(LC_ALL, "en_US.utf8");
 
-    // Set the main thread's name to "Main"
-    TaskManager::setCurrentThreadName("Main");
+    // Tell the Task Manager that we are the main thread
+    TaskManager::setMainThreadId(std::this_thread::get_id());
+
+    // Set the main thread's name. This is the name that will be displayed
+    // in tools like btop
+    TaskManager::setCurrentThreadName("ImHex 🔍");
 
     // Setup crash handlers right away to catch crashes as early as possible
     crash::setupCrashHandlers();
+
+    // Enable exception tracing on the main thread
+    trace::enableExceptionCaptureForCurrentThread();
 
     // Run platform-specific initialization code
     Window::initNative();
 
     // Setup messaging system to allow sending commands to the main ImHex instance
-    hex::messaging::setupMessaging();
+    messaging::setupMessaging();
 
     // Handle command line arguments if any have been passed
     if (argc > 1) {
+        crash::setCrashCallback([](auto){});
         init::runCommandLine(argc, argv);
     }
+
 
     // Log some system information to aid debugging when users share their logs
     log::info("Welcome to ImHex {}!", ImHexApi::System::getImHexVersion().get());
@@ -53,11 +65,10 @@ int main(int argc, char **argv) {
 
     #if defined(OS_LINUX)
         if (auto distro = ImHexApi::System::getLinuxDistro(); distro.has_value()) {
-            log::info("Linux distribution: {}. Version: {}", distro->name, distro->version == "" ? "None" : distro->version);
+            log::info("Linux distribution: {}. Version: {}", distro->name, distro->version.empty() ? "None" : distro->version);
         }
     #endif
-
-
+    
     // Run ImHex
     return init::runImHex();
 }

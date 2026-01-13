@@ -15,9 +15,9 @@
 namespace hex {
 
     static AutoReset<std::map<std::string, WorkspaceManager::Workspace>> s_workspaces;
-    static decltype(s_workspaces)::Type::iterator s_currentWorkspace  = s_workspaces->end();
-    static decltype(s_workspaces)::Type::iterator s_previousWorkspace = s_workspaces->end();
-    static decltype(s_workspaces)::Type::iterator s_workspaceToRemove = s_workspaces->end();
+    static auto s_currentWorkspace  = s_workspaces->end();
+    static auto s_previousWorkspace = s_workspaces->end();
+    static auto s_workspaceToRemove = s_workspaces->end();
 
     void WorkspaceManager::createWorkspace(const std::string& name, const std::string &layout) {
         s_currentWorkspace = s_workspaces->insert_or_assign(name, Workspace {
@@ -87,16 +87,20 @@ namespace hex {
             workspaceName = s_currentWorkspace->first;
         }
 
-
         wolv::io::File file(path, wolv::io::File::Mode::Create);
 
         if (!file.isValid()) {
             return false;
         }
 
+        const auto layoutString = LayoutManager::saveToString();
+        if (auto it = s_workspaces->find(workspaceName); it != s_workspaces->end()) {
+            it->second.layout = layoutString;
+        }
+
         nlohmann::json json;
         json["name"]    = workspaceName;
-        json["layout"]  = LayoutManager::saveToString();
+        json["layout"]  = layoutString;
         json["builtin"] = builtin;
 
         file.writeString(json.dump(4));
@@ -131,7 +135,7 @@ namespace hex {
 
     void WorkspaceManager::process() {
         if (s_previousWorkspace != s_currentWorkspace) {
-            log::info("Updating workspace");
+            log::debug("Updating workspace");
             if (s_previousWorkspace != s_workspaces->end()) {
                 auto newWorkspace = s_currentWorkspace;
                 s_currentWorkspace = s_previousWorkspace;
@@ -161,7 +165,8 @@ namespace hex {
     void WorkspaceManager::reload() {
         WorkspaceManager::reset();
 
-        for (const auto &defaultPath : paths::Workspaces.read()) {
+        // Explicitly only search paths that are writable so the workspaces can be modified
+        for (const auto &defaultPath : paths::Workspaces.write()) {
             for (const auto &entry : std::fs::directory_iterator(defaultPath)) {
                 if (!entry.is_regular_file()) {
                     continue;

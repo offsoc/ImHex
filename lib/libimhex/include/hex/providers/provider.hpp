@@ -3,7 +3,6 @@
 #include <hex.hpp>
 
 #include <list>
-#include <map>
 #include <optional>
 #include <string>
 #include <variant>
@@ -17,24 +16,142 @@
 #include <hex/providers/undo_redo/stack.hpp>
 
 namespace hex::prv {
+    /**
+     * @brief Interface for providers that need to draw a config interface when being created
+     */
+    class IProviderLoadInterface {
+    public:
+        virtual ~IProviderLoadInterface() = default;
+        virtual bool drawLoadInterface() = 0;
+    };
 
     /**
-     * @brief Represent the data source for a tab in the UI
+     * @brief Interface for providers that want to provide a custom sidebar interface
      */
-    class Provider {
+    class IProviderSidebarInterface {
     public:
-        struct Description {
-            std::string name;
-            std::string value;
-        };
+        virtual ~IProviderSidebarInterface() = default;
+        virtual void drawSidebarInterface() = 0;
+    };
 
+    /**
+     * @brief Interface for providers that need to show a file picker dialog when being created
+     */
+    class IProviderFilePicker {
+    public:
+        virtual ~IProviderFilePicker() = default;
+        virtual bool handleFilePicker() = 0;
+    };
+
+    /**
+     * @brief Interface for providers that want to display custom menu items in the provider context menu
+     */
+    class IProviderMenuItems {
+    public:
         struct MenuEntry {
             std::string name;
             const char *icon;
             std::function<void()> callback;
         };
 
+        virtual ~IProviderMenuItems() = default;
+        virtual std::vector<MenuEntry> getMenuEntries() = 0;
+    };
+
+    /**
+     * @brief Interface for providers that want to show some extra information in the information view
+     */
+    class IProviderDataDescription {
+    public:
+        struct Description {
+            std::string name;
+            std::string value;
+        };
+
+        virtual ~IProviderDataDescription() = default;
+        [[nodiscard]] virtual std::vector<Description> getDataDescription() const = 0;
+    };
+
+    class IProviderDataBackupable {
+    public:
+        explicit IProviderDataBackupable(Provider *provider);
+        virtual ~IProviderDataBackupable() = default;
+
+        void createBackupIfNeeded(const std::fs::path &inputFilePath);
+    private:
+        Provider *m_provider = nullptr;
+        bool m_backupCreated = false;
+
+        bool m_shouldCreateBackups = true;
+        u64 m_maxSize;
+        std::string m_backupExtension;
+    };
+
+    /**
+     * @brief Represent the data source for a tab in the UI
+     */
+    class Provider {
+    public:
         constexpr static u64 MaxPageSize = 0xFFFF'FFFF'FFFF'FFFF;
+
+        class OpenResult {
+        public:
+            OpenResult() : m_result(std::monostate{}) {}
+
+            [[nodiscard]] static OpenResult failure(std::string errorMessage) {
+                OpenResult result;
+                result.m_result = std::move(errorMessage);
+                return result;
+            }
+
+            [[nodiscard]] static OpenResult warning(std::string warningMessage) {
+                OpenResult result;
+                result.m_result = std::move(warningMessage);
+                result.m_warning = true;
+                return result;
+            }
+
+            [[nodiscard]] static OpenResult redirect(Provider *provider) {
+                OpenResult result;
+                result.m_result = provider;
+                return result;
+            }
+
+            [[nodiscard]] bool isSuccess() const {
+                return std::holds_alternative<std::monostate>(m_result);
+            }
+
+            [[nodiscard]] bool isFailure() const {
+                return std::holds_alternative<std::string>(m_result) && !m_warning;
+            }
+
+            [[nodiscard]] bool isWarning() const {
+                return std::holds_alternative<std::string>(m_result) && m_warning;
+            }
+
+            [[nodiscard]] bool isRedirecting() const {
+                return std::holds_alternative<Provider*>(m_result);
+            }
+
+            [[nodiscard]] Provider* getRedirectProvider() const {
+                if (std::holds_alternative<Provider*>(m_result)) {
+                    return std::get<Provider*>(m_result);
+                }
+                return nullptr;
+            }
+
+            [[nodiscard]] std::string_view getErrorMessage() const {
+                if (std::holds_alternative<std::string>(m_result)) {
+                    return std::get<std::string>(m_result);
+                }
+
+                return "";
+            }
+
+        private:
+            std::variant<std::monostate, std::string, Provider*> m_result;
+            bool m_warning = false;
+        };
 
         Provider();
         virtual ~Provider();
@@ -51,7 +168,7 @@ namespace hex::prv {
          * @note This is not related to the EventProviderOpened event
          * @return true if the provider was opened successfully, else false
          */
-        [[nodiscard]] virtual bool open() = 0;
+        [[nodiscard]] virtual OpenResult open() = 0;
 
         /**
          * @brief Closes this provider
@@ -155,12 +272,18 @@ namespace hex::prv {
         [[nodiscard]] virtual UnlocalizedString getTypeName() const = 0;
 
         /**
-         * @brief Gets a human readable representation of the current provider
+         * @brief Gets a human-readable representation of the current provider
          * @note This is mainly used to display the provider in the UI. For example, the file provider
          * will return the file name here
          * @return The name of the current provider
          */
         [[nodiscard]] virtual std::string getName() const = 0;
+
+        /**
+         * @brief Gets the icon of this provider
+         * @return The icon string
+         */
+        [[nodiscard]] virtual const char* getIcon() const = 0;
 
         bool resize(u64 newSize);
         void insert(u64 offset, u64 size);
@@ -191,7 +314,6 @@ namespace hex::prv {
         [[nodiscard]] virtual u64 getSize() const;
         [[nodiscard]] virtual std::optional<u32> getPageOfAddress(u64 address) const;
 
-        [[nodiscard]] virtual std::vector<Description> getDataDescription() const;
         [[nodiscard]] virtual std::variant<std::string, i128> queryInformation(const std::string &category, const std::string &argument);
 
         virtual void undo();
@@ -199,16 +321,6 @@ namespace hex::prv {
 
         [[nodiscard]] virtual bool canUndo() const;
         [[nodiscard]] virtual bool canRedo() const;
-
-        [[nodiscard]] virtual bool hasFilePicker() const;
-        virtual bool handleFilePicker();
-
-        virtual std::vector<MenuEntry> getMenuEntries() { return { }; }
-
-        [[nodiscard]] virtual bool hasLoadInterface() const;
-        [[nodiscard]] virtual bool hasInterface() const;
-        virtual bool drawLoadInterface();
-        virtual void drawInterface();
 
         [[nodiscard]] u32 getID() const;
         void setID(u32 id);
@@ -223,9 +335,6 @@ namespace hex::prv {
 
         void skipLoadInterface() { m_skipLoadInterface = true; }
         [[nodiscard]] bool shouldSkipLoadInterface() const { return m_skipLoadInterface; }
-
-        void setErrorMessage(const std::string &errorMessage) { m_errorMessage = errorMessage; }
-        [[nodiscard]] const std::string& getErrorMessage() const { return m_errorMessage; }
 
         template<std::derived_from<undo::Operation> T>
         bool addUndoableOperation(auto && ... args) {
@@ -250,16 +359,13 @@ namespace hex::prv {
         bool m_dirty = false;
 
         /**
-         * @brief Control whetever to skip provider initialization
-         * initialization may be asking the user for information related to the provider,
+         * @brief Control if provider initialization should be skipped.
+         * Initialization may be asking the user for information related to the provider,
          * e.g. a process ID for the process memory provider
          * this is used mainly when restoring a provider with already known initialization information
          * for example when loading a project or loading a provider from the "recent" lsit
-         * 
          */
         bool m_skipLoadInterface = false;
-
-        std::string m_errorMessage = "Unspecified error";
 
         u64 m_pageSize = MaxPageSize;
     };

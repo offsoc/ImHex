@@ -6,12 +6,17 @@
 
 #include <set>
 #include <string_view>
+#include <fonts/vscode_icons.hpp>
 
 namespace hex::plugin::builtin {
 
-    class FileProvider : public hex::prv::Provider {
+    class FileProvider : public prv::Provider,
+                         public prv::IProviderDataDescription,
+                         public prv::IProviderFilePicker,
+                         public prv::IProviderMenuItems,
+                         public prv::IProviderDataBackupable {
     public:
-        FileProvider() = default;
+        FileProvider() : IProviderDataBackupable(this) {}
         ~FileProvider() override = default;
 
         [[nodiscard]] bool isAvailable() const override;
@@ -31,17 +36,15 @@ namespace hex::plugin::builtin {
         void saveAs(const std::fs::path &path) override;
 
         [[nodiscard]] std::string getName() const override;
-        [[nodiscard]] std::vector<Description> getDataDescription() const override;
         std::variant<std::string, i128> queryInformation(const std::string &category, const std::string &argument) override;
 
-        [[nodiscard]] bool hasFilePicker() const override { return true; }
+        [[nodiscard]] std::vector<Description> getDataDescription() const override;
         [[nodiscard]] bool handleFilePicker() override;
-
         std::vector<MenuEntry> getMenuEntries() override;
 
         void setPath(const std::fs::path &path);
 
-        [[nodiscard]] bool open() override;
+        [[nodiscard]] OpenResult open() override;
         void close() override;
 
         void loadSettings(const nlohmann::json &settings) override;
@@ -51,15 +54,19 @@ namespace hex::plugin::builtin {
             return "hex.builtin.provider.file";
         }
 
+        [[nodiscard]] const char* getIcon() const override {
+            return ICON_VS_FILE_BINARY;
+        }
+
         [[nodiscard]] std::pair<Region, bool> getRegionValidity(u64 address) const override;
 
-    private:
         void convertToMemoryFile();
         void convertToDirectAccess();
 
+    private:
         void handleFileChange();
 
-        bool open(bool memoryMapped);
+        OpenResult open(bool directAccess);
 
     protected:
         std::fs::path m_path;

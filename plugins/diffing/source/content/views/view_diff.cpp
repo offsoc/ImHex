@@ -1,35 +1,52 @@
 #include "content/views/view_diff.hpp"
+#include <toasts/toast_notification.hpp>
 
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/imhex_api/provider.hpp>
 #include <hex/api/events/requests_gui.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
 
 #include <hex/helpers/fmt.hpp>
 #include <hex/providers/buffered_reader.hpp>
 
 #include <fonts/vscode_icons.hpp>
+#include <fonts/tabler_icons.hpp>
 #include <wolv/utils/guards.hpp>
 
 namespace hex::plugin::diffing {
 
     using DifferenceType = ContentRegistry::Diffing::DifferenceType;
 
-    ViewDiff::ViewDiff() : View::Window("hex.diffing.view.diff.name", ICON_VS_DIFF_SIDEBYSIDE) {
+    ViewDiff::ViewDiff() : View::Window("hex.diffing.view.diff.name", ICON_VS_DIFF) {
         // Clear the selected diff providers when a provider is closed
         EventProviderClosed::subscribe(this, [this](prv::Provider *) {
             this->reset();
         });
         EventDataChanged::subscribe(this, [this](prv::Provider *) {
-            m_analyzed = false;
+            m_analysisInterrupted = m_analyzed = false;
+        });
+
+        // Handle region selection
+        EventRegionSelected::subscribe(this, [this](const auto &region) {
+            // Save current selection
+            if (!ImHexApi::Provider::isValid() || region == Region::Invalid()) {
+                m_selectedProvider = nullptr;
+            } else {
+                m_selectedAddress = region.address;
+                m_selectedProvider = region.getProvider();
+            }
         });
 
         // Set the background highlight callbacks for the two hex editor columns
         m_columns[0].hexEditor.setBackgroundHighlightCallback(this->createCompareFunction(1));
         m_columns[1].hexEditor.setBackgroundHighlightCallback(this->createCompareFunction(0));
+
+        this->registerMenuItems();
     }
 
     ViewDiff::~ViewDiff() {
         EventProviderClosed::unsubscribe(this);
         EventDataChanged::unsubscribe(this);
+        EventRegionSelected::unsubscribe(this);
     }
 
     namespace {
@@ -64,6 +81,13 @@ namespace hex::plugin::diffing {
             auto providers = ImHexApi::Provider::getProviders();
             auto &providerIndex = column.provider;
 
+            std::erase_if(providers, [&](const prv::Provider *provider) {
+                if (!provider->isAvailable() || !provider->isReadable())
+                    return true;
+
+                return false;
+            });
+
             // Get the name of the currently selected provider
             std::string preview;
             if (ImHexApi::Provider::isValid() && providerIndex >= 0)
@@ -94,7 +118,9 @@ namespace hex::plugin::diffing {
 
     void ViewDiff::analyze(prv::Provider *providerA, prv::Provider *providerB) {
         auto commonSize = std::max(providerA->getActualSize(), providerB->getActualSize());
-        m_diffTask = TaskManager::createTask("hex.diffing.view.diff.task.diffing", commonSize, [this, providerA, providerB](Task &) {
+        m_diffTask = TaskManager::createTask("hex.diffing.view.diff.task.diffing", commonSize, [this, providerA, providerB](Task &task) {
+            task.setInterruptCallback([this]{ m_analysisInterrupted = true; });
+
             auto differences = m_algorithm->analyze(providerA, providerB);
 
             auto providers = ImHexApi::Provider::getProviders();
@@ -124,6 +150,7 @@ namespace hex::plugin::diffing {
             column.diffTree.clear();
             column.differences.clear();
         }
+        m_analysisInterrupted = m_analyzed  = false;
     }
 
 
@@ -189,7 +216,7 @@ namespace hex::plugin::diffing {
         }
 
         // Analyze the providers if they are valid and the user selected a new provider
-        if (!m_analyzed && a.provider != -1 && b.provider != -1 && !m_diffTask.isRunning() && m_algorithm != nullptr) {
+        if (!m_analyzed && !m_analysisInterrupted && a.provider != -1 && b.provider != -1 && !m_diffTask.isRunning() && m_algorithm != nullptr) {
             const auto &providers = ImHexApi::Provider::getProviders();
             auto providerA = providers[a.provider];
             auto providerB = providers[b.provider];
@@ -215,8 +242,8 @@ namespace hex::plugin::diffing {
 
         // Draw the two hex editor columns side by side
         if (ImGui::BeginTable("##binary_diff", 2, ImGuiTableFlags_None, diffingColumnSize)) {
-            ImGui::TableSetupColumn("hex.diffing.view.diff.provider_a"_lang);
-            ImGui::TableSetupColumn("hex.diffing.view.diff.provider_b"_lang);
+            ImGui::TableSetupColumn(fmt::format(" {}", "hex.diffing.view.diff.provider_a"_lang).c_str());
+            ImGui::TableSetupColumn(fmt::format(" {}", "hex.diffing.view.diff.provider_b"_lang).c_str());
             ImGui::TableHeadersRow();
 
             ImGui::BeginDisabled(m_diffTask.isRunning());
@@ -229,11 +256,11 @@ namespace hex::plugin::diffing {
                 ImGui::SameLine();
 
                 // Draw first provider selector
-                if (drawProviderSelector(a)) m_analyzed = false;
+                if (drawProviderSelector(a)) m_analysisInterrupted = m_analyzed = false;
 
                 // Draw second provider selector
                 ImGui::TableNextColumn();
-                if (drawProviderSelector(b)) m_analyzed = false;
+                if (drawProviderSelector(b)) m_analysisInterrupted = m_analyzed = false;
             }
             ImGui::EndDisabled();
 
@@ -327,7 +354,7 @@ namespace hex::plugin::diffing {
 
                         // Draw start address
                         ImGui::TableNextColumn();
-                        if (ImGui::Selectable(hex::format("0x{:04X} - 0x{:04X}", regionA.start, regionA.end).c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
+                        if (ImGui::Selectable(fmt::format("0x{:04X} - 0x{:04X}", regionA.start, regionA.end).c_str(), false, ImGuiSelectableFlags_SpanAllColumns)) {
                             const Region selectionA = { regionA.start, ((regionA.end - regionA.start) + 1) };
                             const Region selectionB = { regionB.start, ((regionB.end - regionB.start) + 1) };
 
@@ -347,7 +374,7 @@ namespace hex::plugin::diffing {
 
                         // Draw end address
                         ImGui::TableNextColumn();
-                        ImGui::TextUnformatted(hex::format("0x{:04X} - 0x{:04X}", regionB.start, regionB.end).c_str());
+                        ImGui::TextUnformatted(fmt::format("0x{:04X} - 0x{:04X}", regionB.start, regionB.end).c_str());
 
                         const auto &providers = ImHexApi::Provider::getProviders();
                         std::vector<u8> data;
@@ -405,7 +432,7 @@ namespace hex::plugin::diffing {
                     ImGui::PushID(algorithm.get());
                     if (ImGui::Selectable(Lang(algorithm->getUnlocalizedName()))) {
                         m_algorithm = algorithm.get();
-                        m_analyzed  = false;
+                        m_analysisInterrupted = m_analyzed  = false;
                     }
                     ImGui::PopID();
                 }
@@ -432,5 +459,99 @@ namespace hex::plugin::diffing {
         }
     }
 
+    void ViewDiff::registerMenuItems() {
+        ContentRegistry::UserInterface::addMenuItemSeparator({ "hex.builtin.menu.file" }, 1700, this);
 
+        ContentRegistry::UserInterface::addMenuItemSubMenu({ "hex.builtin.menu.file", "hex.diffing.view.diff.menu.file.jumping" }, ICON_TA_ARROWS_MOVE_HORIZONTAL, 1710,
+                                                           []{},
+                                                           [this]{ return (bool) m_analyzed; },
+                                                           this);
+
+        ContentRegistry::UserInterface::addMenuItem({
+                "hex.builtin.menu.file",
+                "hex.diffing.view.diff.menu.file.jumping",
+                "hex.diffing.view.diff.menu.file.jumping.prev_diff"
+            },
+            ICON_TA_ARROW_BAR_TO_LEFT_DASHED,
+            1720,
+            CTRLCMD + Keys::Left,
+            [this] {
+                if (m_selectedProvider == nullptr)
+                    return;
+
+                // Get the column of the currently selected region
+                auto providers = ImHexApi::Provider::getProviders();
+                Column *selectedColumn = nullptr;
+                for (auto &column : m_columns) {
+                    if (providers[column.provider] == m_selectedProvider) {
+                        selectedColumn = &column;
+                        break;
+                    }
+                }
+
+                if (selectedColumn == nullptr)
+                    return;
+
+                // Jump to previous difference
+                auto prevRange = selectedColumn->diffTree.prevInterval(m_selectedAddress);
+                if (prevRange.has_value()) {
+                    selectedColumn->hexEditor.setSelection(prevRange->interval.start, prevRange->interval.end);
+                    selectedColumn->hexEditor.jumpToSelection();
+                } else {
+                    ui::ToastInfo::open("hex.diffing.view.diff.jumping.beginning_reached"_lang);
+                }
+            },
+            [this]{ return (bool) m_analyzed; },
+            this
+        );
+
+        ContentRegistry::UserInterface::addMenuItem({
+                "hex.builtin.menu.file",
+                "hex.diffing.view.diff.menu.file.jumping",
+                "hex.diffing.view.diff.menu.file.jumping.next_diff"
+            },
+            ICON_TA_ARROW_BAR_TO_RIGHT_DASHED,
+            1730,
+            CTRLCMD + Keys::Right,
+            [this] {
+                if (m_selectedProvider == nullptr)
+                    return;
+
+                // Get the column of the currently selected region
+                auto providers = ImHexApi::Provider::getProviders();
+                Column *selectedColumn = nullptr;
+                for (auto &column : m_columns) {
+                    if (providers[column.provider] == m_selectedProvider) {
+                        selectedColumn = &column;
+                        break;
+                    }
+                }
+
+                if (selectedColumn == nullptr)
+                    return;
+
+                // Jump to next difference
+                auto nextRange = selectedColumn->diffTree.nextInterval(m_selectedAddress);
+                if (nextRange.has_value()) {
+                    selectedColumn->hexEditor.setSelection(nextRange->interval.start, nextRange->interval.end);
+                    selectedColumn->hexEditor.jumpToSelection();
+                } else {
+                    ui::ToastInfo::open("hex.diffing.view.diff.jumping.end_reached"_lang);
+                }
+            },
+            [this]{ return (bool) m_analyzed; },
+            this
+        );
+    }
+
+    void ViewDiff::drawHelpText() {
+        ImGuiExt::TextFormattedWrapped("This view allows you to do binary comparisons between two data sources. Select the data sources you want to compare from the dropdown menus at the top. Once both data sources are selected, the differences will be calculated automatically.");
+        ImGui::NewLine();
+        ImGuiExt::TextFormattedWrapped("Differences are highlighted in the hex editors. Green indicates added bytes, red indicates removed bytes, and yellow indicates modified bytes. All differences are also listed in the table below the hex editors, where you can click on a difference to jump to it in both hex editors.");
+        ImGui::NewLine();
+        ImGuiExt::TextFormattedWrapped(
+            "By default, a simple byte-by-byte comparison algorithm is used. This is quick but will only identify byte modifications but doesn't match insertions or deletions.\n"
+            "For a more sophisticated comparison, you can select a different diffing algorithm from the settings menu (gear icon)."
+        );
+    }
 }

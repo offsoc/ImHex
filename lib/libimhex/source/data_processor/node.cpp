@@ -24,7 +24,7 @@ namespace hex::dp {
         auto attribute = this->getConnectedInputAttribute(index);
 
         if (attribute == nullptr)
-            throwNodeError(hex::format("Nothing connected to input '{0}'", Lang(m_attributes[index].getUnlocalizedName())));
+            throwNodeError(fmt::format("Nothing connected to input '{0}'", Lang(m_attributes[index].getUnlocalizedName())));
 
         if (attribute->getType() != Attribute::Type::Buffer)
             throwNodeError("Tried to read buffer from non-buffer attribute");
@@ -151,8 +151,8 @@ namespace hex::dp {
         m_overlay->getData() = data;
     }
 
-    [[noreturn]] void Node::throwNodeError(const std::string &message) {
-        throw NodeError { this, message };
+    [[noreturn]] void Node::throwNodeError(const std::string &msg) {
+        throw NodeError(this, msg);
     }
 
     void Node::setAttributes(std::vector<Attribute> attributes) {

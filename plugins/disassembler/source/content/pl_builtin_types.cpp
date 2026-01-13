@@ -1,5 +1,4 @@
-#include <hex/api/imhex_api.hpp>
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/pattern_language.hpp>
 
 #include <hex/helpers/http_requests.hpp>
 #include <hex/helpers/utils.hpp>
@@ -9,8 +8,7 @@
 
 #include <pl/patterns/pattern.hpp>
 
-#include <capstone/capstone.h>
-#include <content/helpers/disassembler.hpp>
+#include <content/helpers/capstone.hpp>
 
 
 namespace hex::plugin::disasm {
@@ -50,6 +48,10 @@ namespace hex::plugin::disasm {
     protected:
         [[nodiscard]] std::string formatDisplayValue() override {
             return m_instructionString;
+        }
+
+       [[nodiscard]] std::string toString() override {
+             return m_instructionString;
         }
 
     private:
@@ -96,7 +98,7 @@ namespace hex::plugin::disasm {
                     else if (equalsIgnoreCase(syntaxString, "motorola"))
                         syntax = CS_OPT_SYNTAX_MOTOROLA;
                     else
-                        err::E0012.throwError(hex::format("Invalid disassembler syntax name '{}'", syntaxString));
+                        err::E0012.throwError(fmt::format("Invalid disassembler syntax name '{}'", syntaxString));
 
                     cs_option(capstone, CS_OPT_SYNTAX, syntax);
                     cs_option(capstone, CS_OPT_SKIPDATA, CS_OPT_ON);

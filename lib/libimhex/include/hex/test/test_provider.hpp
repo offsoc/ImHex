@@ -27,8 +27,8 @@ namespace hex::test {
             return "";
         }
 
-        [[nodiscard]] std::vector<Description> getDataDescription() const override {
-            return {};
+        [[nodiscard]] const char* getIcon() const override {
+            return "";
         }
 
         void readRaw(u64 offset, void *buffer, size_t size) override {
@@ -49,7 +49,7 @@ namespace hex::test {
 
         [[nodiscard]] UnlocalizedString getTypeName() const override { return "hex.test.provider.test"; }
 
-        bool open() override { return true; }
+        OpenResult open() override { return {}; }
         void close() override { }
 
         nlohmann::json storeSettings(nlohmann::json) const override { return {}; }

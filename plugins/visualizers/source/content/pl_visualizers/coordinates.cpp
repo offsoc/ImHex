@@ -1,14 +1,15 @@
-#include <hex/helpers/utils.hpp>
-
 #include <content/visualizer_helpers.hpp>
 
-#include <imgui.h>
 #include <hex/api/task_manager.hpp>
 #include <hex/api/localization_manager.hpp>
 #include <hex/helpers/http_requests.hpp>
-#include <nlohmann/json.hpp>
 
+#include <hex/helpers/scaling.hpp>
+
+#include <imgui.h>
 #include <hex/ui/imgui_imhex_extensions.h>
+
+#include <nlohmann/json.hpp>
 #include <romfs/romfs.hpp>
 
 namespace hex::plugin::visualizers {
@@ -63,7 +64,7 @@ namespace hex::plugin::visualizers {
                 addressTask = TaskManager::createBackgroundTask("hex.visualizers.pl_visualizer.coordinates.querying", [lat = latitude, lon = longitude](auto &) {
                     constexpr static auto ApiURL = "https://geocode.maps.co/reverse?lat={}&lon={}&format=jsonv2";
 
-                    HttpRequest request("GET", hex::format(ApiURL, lat, lon));
+                    HttpRequest request("GET", fmt::format(ApiURL, lat, lon));
                     auto response = request.execute().get();
 
                     if (!response.isSuccess())
@@ -76,13 +77,13 @@ namespace hex::plugin::visualizers {
 
                         std::scoped_lock lock(addressMutex);
                         if (jsonAddr.contains("village")) {
-                            address = hex::format("{} {}, {} {}",
+                            address = fmt::format("{} {}, {} {}",
                                                   jsonAddr["village"].get<std::string>(),
                                                   jsonAddr["county"].get<std::string>(),
                                                   jsonAddr["state"].get<std::string>(),
                                                   jsonAddr["country"].get<std::string>());
                         } else if (jsonAddr.contains("city")) {
-                            address = hex::format("{}, {} {}, {} {}",
+                            address = fmt::format("{}, {} {}, {} {}",
                                                   jsonAddr["road"].get<std::string>(),
                                                   jsonAddr["quarter"].get<std::string>(),
                                                   jsonAddr["city"].get<std::string>(),

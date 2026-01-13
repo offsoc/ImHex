@@ -1,8 +1,7 @@
 #pragma once
 
 #include <hex.hpp>
-#include <hex/api/imhex_api.hpp>
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/hex_editor.hpp>
 #include <hex/providers/provider.hpp>
 #include <hex/helpers/encoding_file.hpp>
 
@@ -56,6 +55,9 @@ namespace hex::ui {
         }
 
         ScrollPosition& operator=(ImS64 value) {
+            if (value < 0)
+                 value = 0;
+
             this->get() = value;
             return *this;
         }
@@ -109,6 +111,7 @@ namespace hex::ui {
         void drawTooltip(u64 address, const u8 *data, size_t size) const;
         void drawScrollbar(ImVec2 characterSize);
         void drawMinimap(ImVec2 characterSize);
+        void drawMinimapPopup();
 
         void handleSelection(u64 address, u32 bytesPerCell, const u8 *data, bool cellHovered);
         std::optional<color_t> applySelectionColor(u64 byteAddress, std::optional<color_t> color);
@@ -158,7 +161,7 @@ namespace hex::ui {
 
             m_selectionStart = std::clamp<u64>(start, 0, maxAddress);
             m_selectionEnd = std::clamp<u64>(end, 0, maxAddress);
-            m_cursorPosition = m_selectionEnd;
+            m_cursorPosition = m_selectionStart;
 
             if (m_selectionChanged) {
                 auto selection = this->getSelection();
@@ -233,12 +236,32 @@ namespace hex::ui {
             m_upperCaseHex = upperCaseHex;
         }
 
+        bool shouldUpperCaseHex() const {
+            return m_upperCaseHex;
+        }
+
         void enableGrayOutZeros(bool grayOutZeros) {
             m_grayOutZero = grayOutZeros;
         }
 
+        bool shouldGrayOutZeros() const {
+            return m_grayOutZero;
+        }
+
         void enableShowAscii(bool showAscii) {
             m_showAscii = showAscii;
+        }
+
+        bool shouldShowAscii() const {
+            return m_showAscii;
+        }
+
+        void enableShowExtendedAscii(bool showExtendedAscii) {
+            m_showExtendedAscii = showExtendedAscii;
+        }
+
+        bool shouldShowExtendedAscii() const {
+            return m_showExtendedAscii;
         }
 
         void enableSyncScrolling(bool syncScrolling) {
@@ -251,6 +274,39 @@ namespace hex::ui {
 
         void setCharacterCellPadding(u32 characterCellPadding) {
             m_characterCellPadding = characterCellPadding;
+        }
+
+        void setMiniMapWidth(int miniMapWidth) {
+            m_miniMapWidth = miniMapWidth;
+        }
+
+        [[nodiscard]] bool isMiniMapVisible() const {
+            return m_showMiniMap;
+        }
+
+        int getMiniMapWidth() const {
+            return m_miniMapWidth;
+        }
+
+        std::optional<std::string> getMiniMapVisualizer() const {
+            if (!m_showMiniMap)
+                return std::nullopt;
+            return m_miniMapVisualizer->unlocalizedName.get();
+        }
+
+        void setMiniMapVisualizer(const UnlocalizedString &miniMapVisualizerName) {
+            if (miniMapVisualizerName.empty()) {
+                m_showMiniMap = false;
+                m_miniMapVisualizer = nullptr;
+            } else {
+                for (const auto &visualizer : ContentRegistry::HexEditor::impl::getMiniMapVisualizers()) {
+                    if (visualizer->unlocalizedName == miniMapVisualizerName) {
+                        m_miniMapVisualizer = visualizer;
+                        m_showMiniMap = true;
+                        return;
+                    }
+                }
+            }
         }
 
         [[nodiscard]] const std::optional<EncodingFile>& getCustomEncoding() const {
@@ -305,7 +361,13 @@ namespace hex::ui {
             m_enteredEditingMode = true;
 
             m_editingBytes.resize(m_currDataVisualizer->getBytesPerCell());
-            m_provider->read(address + m_provider->getBaseAddress(), m_editingBytes.data(), m_editingBytes.size());
+            if (m_mode == Mode::Overwrite) {
+                m_provider->read(address + m_provider->getBaseAddress(), m_editingBytes.data(), m_editingBytes.size());
+            } else if (m_mode == Mode::Insert) {
+                std::memset(m_editingBytes.data(), 0x00, m_editingBytes.size());
+                m_provider->insert(address, m_editingBytes.size());
+            }
+
             m_editingCellType = CellType::Hex;
         }
 
@@ -380,10 +442,12 @@ namespace hex::ui {
         bool m_upperCaseHex = true;
         bool m_grayOutZero = true;
         bool m_showAscii = true;
+        bool m_showExtendedAscii = false;
         bool m_showCustomEncoding = true;
         bool m_showMiniMap = false;
         bool m_showSelectionInFooter = false;
         int m_miniMapWidth = 5;
+        bool m_minimapValueBrightness = true;
         u32 m_byteCellPadding = 0, m_characterCellPadding = 0;
         bool m_footerCollapsed = true;
 

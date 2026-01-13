@@ -28,6 +28,8 @@
 
 #include <imgui.h>
 
+#include <wolv/utils/charconv.hpp>
+
 namespace hex {
 
     #if !defined(HEX_MODULE_EXPORT)
@@ -73,10 +75,6 @@ namespace hex {
         return result;
     }
 
-    [[nodiscard]] float operator""_scaled(long double value);
-    [[nodiscard]] float operator""_scaled(unsigned long long value);
-    [[nodiscard]] ImVec2 scaled(const ImVec2 &vector);
-
     template<typename T>
     [[nodiscard]] std::vector<T> operator|(const std::vector<T> &lhs, const std::vector<T> &rhs) {
         std::vector<T> result;
@@ -98,8 +96,10 @@ namespace hex {
     [[nodiscard]] std::string toByteString(u64 bytes);
     [[nodiscard]] std::string makePrintable(u8 c);
 
-    void startProgram(const std::string &command);
+    void startProgram(const std::vector<std::string> &command);
     int executeCommand(const std::string &command);
+    std::optional<std::string> executeCommandWithOutput(const std::string &command);
+    void executeCommandDetach(const std::string &command);
     void openWebpage(std::string url);
 
     extern "C" void registerFont(const char *fontName, const char *fontPath);
@@ -252,10 +252,6 @@ namespace hex {
         return result;
     }
 
-    [[nodiscard]] std::vector<std::string> splitString(const std::string &string, const std::string &delimiter);
-    [[nodiscard]] std::string combineStrings(const std::vector<std::string> &strings, const std::string &delimiter = "");
-    [[nodiscard]] std::string replaceStrings(std::string string, const std::string &search, const std::string &replace);
-
     [[nodiscard]] std::string toEngineeringString(double value);
 
     [[nodiscard]] inline std::vector<u8> parseByteString(const std::string &string) {
@@ -269,7 +265,11 @@ namespace hex {
             if (!std::isxdigit(byteString[i]) || !std::isxdigit(byteString[i + 1]))
                 return {};
 
-            result.push_back(std::strtoul(byteString.substr(i, 2).c_str(), nullptr, 16));
+            auto value = wolv::util::from_chars<u64>(byteString.substr(i, 2), 16);
+            if (!value.has_value())
+                return {};
+
+            result.push_back(*value);
         }
 
         return result;
@@ -285,7 +285,54 @@ namespace hex {
         return result;
     }
 
-    [[nodiscard]] float float16ToFloat32(u16 float16);
+    template<u8 ExponentBits, u8 MantissaBits>
+    [[nodiscard]] constexpr float customFloatToFloat32(u32 value) {
+        static_assert(ExponentBits <= 8, "ExponentBits must be less than 8");
+        static_assert(ExponentBits + MantissaBits + 1 <= 32, "Format doesn't fit into a 32-bit float");
+
+        const u32 sign = value >> (ExponentBits + MantissaBits);
+        const u32 exponent = (value >> MantissaBits) & ((1u << ExponentBits) - 1);
+        u32 mantissa = value & ((1u << MantissaBits) - 1);
+
+        // Calculate the bias for the input format and IEEE-754 float32
+        i32 inputBias = (1 << (ExponentBits - 1)) - 1;
+        i32 float32Bias = 127;
+
+        u32 result = 0;
+
+        if (exponent == 0) {
+            if (mantissa == 0) {
+                // Zero
+                result = sign << 31;
+            } else {
+                // Subnormal
+                int shift = 0;
+                while ((mantissa & (1u << MantissaBits)) == 0) {
+                    mantissa <<= 1;
+                    shift++;
+                }
+                mantissa &= ((1u << MantissaBits) - 1); // clear implicit bit
+                int adjustedExp = float32Bias - inputBias - shift + 1;
+                result = (sign << 31) | (adjustedExp << 23) | (mantissa << (23 - MantissaBits));
+            }
+        } else if (exponent == ((1u << ExponentBits) - 1)) {
+            // Inf or NaN
+            result = (sign << 31) | (0xFF << 23) | (mantissa << (23 - MantissaBits));
+        } else {
+            // Normalized number
+            int adjustedExp = exponent - inputBias + float32Bias;
+            result = (sign << 31) | (adjustedExp << 23) | (mantissa << (23 - MantissaBits));
+        }
+
+        float floatResult;
+        std::memcpy(&floatResult, &result, sizeof(float));
+
+        return floatResult;
+    }
+
+    [[nodiscard]] constexpr float float16ToFloat32(u16 float16) {
+        return customFloatToFloat32<5, 10>(float16);
+    }
 
     [[nodiscard]] inline bool equalsIgnoreCase(std::string_view left, std::string_view right) {
         return std::equal(left.begin(), left.end(), right.begin(), right.end(), [](char a, char b) {
@@ -323,7 +370,7 @@ namespace hex {
 
     [[nodiscard]] std::optional<std::string> getEnvironmentVariable(const std::string &env);
 
-    [[nodiscard]] std::string limitStringLength(const std::string &string, size_t maxLength);
+    [[nodiscard]] std::string limitStringLength(const std::string &string, size_t maxLength, bool fromBothEnds = true);
 
     [[nodiscard]] std::optional<std::fs::path> getInitialFilePath();
 
@@ -343,5 +390,10 @@ namespace hex {
     [[nodiscard]] void* getContainingModule(void* symbol);
 
     [[nodiscard]] std::optional<ImColor> blendColors(const std::optional<ImColor> &a, const std::optional<ImColor> &b);
+    std::optional<std::chrono::system_clock::time_point> parseTime(std::string_view format, const std::string &timeString);
 
+    std::optional<std::string> getOSLanguage();
+
+    void showErrorMessageBox(const std::string &message);
+    void showToastMessage(const std::string &title, const std::string &message);
 }

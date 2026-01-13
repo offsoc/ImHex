@@ -3,8 +3,8 @@
 #include <hex.hpp>
 
 #include <hex/api/plugin_manager.hpp>
-#include <hex/api/content_registry.hpp>
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/content_registry/views.hpp>
+#include <hex/api/imhex_api/fonts.hpp>
 #include <hex/api/layout_manager.hpp>
 #include <hex/api/shortcut_manager.hpp>
 #include <hex/api/workspace_manager.hpp>
@@ -18,12 +18,13 @@
 #include <hex/helpers/logger.hpp>
 #include <hex/helpers/default_paths.hpp>
 
+#include <hex/providers/provider.hpp>
+
 #include <hex/ui/view.hpp>
 #include <hex/ui/popup.hpp>
 #include <hex/ui/banner.hpp>
 
-#include <chrono>
-#include <csignal>
+#include <cmath>
 #include <numbers>
 
 #include <romfs/romfs.hpp>
@@ -39,6 +40,7 @@
 #include <implot3d_internal.h>
 #include <imnodes.h>
 #include <imnodes_internal.h>
+
 #if defined(IMGUI_TEST_ENGINE)
     #include <imgui_te_engine.h>
     #include <imgui_te_ui.h>
@@ -50,14 +52,75 @@
 #include <hex/ui/toast.hpp>
 #include <wolv/utils/guards.hpp>
 #include <fmt/printf.h>
-#include <fmt/chrono.h>
 #include <hex/helpers/opengl.hpp>
 
 namespace hex {
 
-    using namespace std::literals::chrono_literals;
-
     Window::Window() {
+        this->initGLFW();
+        this->initImGui();
+        this->setupNativeWindow();
+        this->registerEventHandlers();
+        this->setupEmergencyPopups();
+    }
+
+    Window::~Window() {
+        RequestCloseImHex::unsubscribe(this);
+        EventDPIChanged::unsubscribe(this);
+        RequestSetPostProcessingShader::unsubscribe(this);
+
+        EventWindowDeinitializing::post(m_window);
+
+        this->exitImGui();
+        this->exitGLFW();
+    }
+
+    void Window::registerEventHandlers() {
+        // Initialize default theme
+        RequestChangeTheme::post("Dark");
+
+        // Handle the close window request by telling GLFW to shut down
+        RequestCloseImHex::subscribe(this, [this](bool noQuestions) {
+            glfwSetWindowShouldClose(m_window, GLFW_TRUE);
+
+            if (!noQuestions)
+                EventWindowClosing::post(m_window);
+        });
+
+        EventDPIChanged::subscribe(this, [this](float oldScaling, float newScaling) {
+            if (oldScaling == newScaling || oldScaling == 0 || newScaling == 0)
+                return;
+
+            int width, height;
+            glfwGetWindowSize(m_window, &width, &height);
+
+            width = float(width) * newScaling / oldScaling;
+            height = float(height) * newScaling / oldScaling;
+
+            ImHexApi::System::impl::setMainWindowSize(width, height);
+            glfwSetWindowSize(m_window, width, height);
+        });
+
+        RequestSetPostProcessingShader::subscribe(this, [this](const std::string &vertexShader, const std::string &fragmentShader) {
+            TaskManager::doLater([this, vertexShader, fragmentShader] {
+                this->loadPostProcessingShader(vertexShader, fragmentShader);
+            });
+        });
+
+
+        LayoutManager::registerLoadCallback([this](std::string_view line) {
+            int width = 0, height = 0;
+            sscanf(std::string(line).data(), "MainWindowSize=%d,%d", &width, &height);
+
+            if (width > 0 && height > 0) {
+                TaskManager::doLater([width, height, this]{
+                    glfwSetWindowSize(m_window, width, height);
+                });
+            }
+        });
+    }
+
+    void Window::setupEmergencyPopups() {
         const static auto openEmergencyPopup = [this](const std::string &title){
             TaskManager::doLater([this, title] {
                 for (const auto &provider : ImHexApi::Provider::getProviders())
@@ -78,122 +141,11 @@ namespace hex {
                 }
             }
         }
-
-        // Initialize the window
-        this->initGLFW();
-        this->initImGui();
-        this->setupNativeWindow();
-        this->registerEventHandlers();
-
-        #if !defined(OS_WEB)
-            this->loadPostProcessingShader();
-        #endif
-
-        ContentRegistry::Settings::impl::store();
-        ContentRegistry::Settings::impl::load();
-
-        EventWindowInitialized::post();
-        EventImHexStartupFinished::post();
-        RequestStartMigration::post();
-
-        TutorialManager::init();
-
-        #if defined(OS_MACOS)
-            ShortcutManager::enableMacOSMode();
-        #endif
     }
 
-    Window::~Window() {
-        m_frameRateThread.request_stop();
-        m_frameRateThread.join();
 
-        EventProviderDeleted::unsubscribe(this);
-        RequestCloseImHex::unsubscribe(this);
-        RequestUpdateWindowTitle::unsubscribe(this);
-        EventAbnormalTermination::unsubscribe(this);
-        RequestOpenPopup::unsubscribe(this);
-
-        EventWindowDeinitializing::post(m_window);
-
-        ContentRegistry::Settings::impl::store();
-
-        this->exitImGui();
-        this->exitGLFW();
-    }
-
-    void Window::registerEventHandlers() {
-        // Initialize default theme
-        RequestChangeTheme::post("Dark");
-
-        // Handle the close window request by telling GLFW to shut down
-        RequestCloseImHex::subscribe(this, [this](bool noQuestions) {
-            glfwSetWindowShouldClose(m_window, GLFW_TRUE);
-
-            if (!noQuestions)
-                EventWindowClosing::post(m_window);
-        });
-
-        // Handle opening popups
-        RequestOpenPopup::subscribe(this, [this](auto name) {
-            std::scoped_lock lock(m_popupMutex);
-
-            m_popupsToOpen.push_back(name);
-        });
-
-        EventDPIChanged::subscribe([this](float oldScaling, float newScaling) {
-            if (oldScaling == newScaling || oldScaling == 0 || newScaling == 0)
-                return;
-
-            int width, height;
-            glfwGetWindowSize(m_window, &width, &height);
-
-            width = float(width) * newScaling / oldScaling;
-            height = float(height) * newScaling / oldScaling;
-
-            ImHexApi::System::impl::setMainWindowSize(width, height);
-            glfwSetWindowSize(m_window, width, height);
-        });
-
-
-        LayoutManager::registerLoadCallback([this](std::string_view line) {
-            int width = 0, height = 0;
-                sscanf(line.data(), "MainWindowSize=%d,%d", &width, &height);
-
-                if (width > 0 && height > 0) {
-                    TaskManager::doLater([width, height, this]{
-                        glfwSetWindowSize(m_window, width, height);
-                    });
-                }
-        });
-    }
-
-    void Window::loadPostProcessingShader() {
-
-        for (const auto &folder : paths::Resources.all()) {
-            auto vertexShaderPath = folder / "shader.vert";
-            auto fragmentShaderPath = folder / "shader.frag";
-
-            if (!wolv::io::fs::exists(vertexShaderPath))
-                continue;
-            if (!wolv::io::fs::exists(fragmentShaderPath))
-                continue;
-
-            auto vertexShaderFile = wolv::io::File(vertexShaderPath, wolv::io::File::Mode::Read);
-            if (!vertexShaderFile.isValid())
-                continue;
-
-            auto fragmentShaderFile = wolv::io::File(fragmentShaderPath, wolv::io::File::Mode::Read);
-            if (!fragmentShaderFile.isValid())
-                continue;
-
-            const auto vertexShaderSource = vertexShaderFile.readString();
-            const auto fragmentShaderSource = fragmentShaderFile.readString();
-            m_postProcessingShader = gl::Shader(vertexShaderSource, fragmentShaderSource);
-            if (!m_postProcessingShader.isValid())
-                continue;
-
-            break;
-        }
+    void Window::loadPostProcessingShader(const std::string &vertexShader, const std::string &fragmentShader) {
+        m_postProcessingShader = gl::Shader(vertexShader, fragmentShader);
     }
 
 
@@ -225,6 +177,12 @@ namespace hex {
 
         log::error("{}", message);
     }
+
+    void Window::unlockFrameRate()  {
+        glfwPostEmptyEvent();
+        m_shouldUnlockFrameRate = true;
+    }
+
 
     void Window::fullFrame() {
         [[maybe_unused]] static u32 crashWatchdog = 0;
@@ -265,9 +223,50 @@ namespace hex {
     }
 
     void Window::loop() {
+        using namespace std::literals::chrono_literals;
+
         glfwShowWindow(m_window);
+
+        double returnToIdleTime = 5.0;
+
+        constexpr static auto IdleFPS = 5.0;
+        constexpr static auto FrameRateUnlockDuration = 1;
+
+        double idleFrameTime = 1.0 / IdleFPS;
+        double targetFrameTime = -1.0;
+        double longestExceededFrameTime = 0.0;
         while (!glfwWindowShouldClose(m_window)) {
-            m_lastStartFrameTime = glfwGetTime();
+            const auto maxFPS = ImHexApi::System::getTargetFPS();
+
+            auto maxFrameTime = [&]() {
+                if (maxFPS < 15) {
+                    // Use the monitor's refresh rate
+                    auto monitor = glfwGetPrimaryMonitor();
+                    if (monitor != nullptr) {
+                        auto videoMode = glfwGetVideoMode(monitor);
+                        if (videoMode != nullptr) {
+                            return 1.0 / videoMode->refreshRate;
+                        }
+                    }
+
+                    // Fallback to 60 FPS if real monitor refresh rate cannot be determined
+                    return 1.0 / 60.0;
+                } else if (maxFPS > 200) {
+                    // Don't limit the frame rate at all
+                    return 0.0;
+                } else {
+                    // Do regular frame rate limiting
+                    return 1.0 / maxFPS;
+                }
+            }();
+
+            if (targetFrameTime < 0) {
+                targetFrameTime = maxFrameTime;
+            }
+
+            auto frameTimeStart = glfwGetTime();
+
+            glfwPollEvents();
 
             {
                 int x = 0, y = 0;
@@ -279,12 +278,13 @@ namespace hex {
                 ImHexApi::System::impl::setMainWindowSize(width, height);
             }
 
-            if (!glfwGetWindowAttrib(m_window, GLFW_VISIBLE) || glfwGetWindowAttrib(m_window, GLFW_ICONIFIED)) {
+            while (!glfwGetWindowAttrib(m_window, GLFW_VISIBLE) || glfwGetWindowAttrib(m_window, GLFW_ICONIFIED)) {
                 // If the application is minimized or not visible, don't render anything
+                // glfwWaitEvents() is supposed to block the thread, but it does pretty often spuriously wake up anyway
+                // so we need to keep looping here until the window is visible again, adding a short sleep to avoid busy-waiting
                 glfwWaitEvents();
+                std::this_thread::sleep_for(100ms);
             }
-
-            m_lastStartFrameTime = glfwGetTime();
 
             static ImVec2 lastWindowSize = ImHexApi::System::getMainWindowSize();
             if (ImHexApi::System::impl::isWindowResizable()) {
@@ -296,29 +296,9 @@ namespace hex {
 
             this->fullFrame();
 
-            ImHexApi::System::impl::setLastFrameTime(glfwGetTime() - m_lastStartFrameTime);
-
-            {
-                while (true) {
-                    glfwPollEvents();
-
-                    if (ImHexApi::System::getTargetFPS() >= 200)
-                        break;
-
-                    {
-                        std::unique_lock lock(m_sleepMutex);
-                        m_sleepCondVar.wait(lock);
-                        if (m_sleepFlag.exchange(false))
-                            break;
-                    }
-                }
-            }
-
-            m_lastFrameTime = glfwGetTime() - m_lastStartFrameTime;
-
             // Unlock frame rate if any mouse button is being held down to allow drag scrolling to be smooth
             if (ImGui::IsAnyMouseDown())
-                this->unlockFrameRate();
+                unlockFrameRate();
 
             // Unlock frame rate if any modifier key is held down since they don't generate key repeat events
             if (
@@ -327,17 +307,61 @@ namespace hex {
                 ImGui::IsKeyPressed(ImGuiKey_LeftSuper) || ImGui::IsKeyPressed(ImGuiKey_RightSuper) ||
                 ImGui::IsKeyPressed(ImGuiKey_LeftAlt) || ImGui::IsKeyPressed(ImGuiKey_RightAlt)
             ) {
-                this->unlockFrameRate();
+                unlockFrameRate();
             }
 
             // Unlock frame rate if there's more than one viewport since these don't call the glfw callbacks registered here
             if (ImGui::GetPlatformIO().Viewports.size() > 1)
-                this->unlockFrameRate();
+                unlockFrameRate();
 
-            // Unlock frame rate if there's any task running that shows a loading animation
-            if (TaskManager::getRunningTaskCount() > 0 || TaskManager::getRunningBlockingTaskCount() > 0) {
-                this->unlockFrameRate();
+            // Unlock frame rate if the frame rate was requested to be unlocked
+            if (ImHexApi::System::impl::frameRateUnlockRequested()) {
+                ImHexApi::System::impl::resetFrameRateUnlockRequested();
+
+                glfwPostEmptyEvent();
+                unlockFrameRate();
             }
+
+            auto frameTime = glfwGetTime() - frameTimeStart;
+
+            if (glfwGetTime() > returnToIdleTime) {
+                targetFrameTime = idleFrameTime;
+            }
+
+            while (frameTime < targetFrameTime - longestExceededFrameTime) {
+                auto remainingFrameTime = targetFrameTime - frameTime;
+                glfwWaitEventsTimeout(std::min(remainingFrameTime, 1000.0));
+
+                auto newFrameTime = glfwGetTime() - frameTimeStart;
+
+                auto elapsedWaitTime = newFrameTime - frameTime;
+
+                // Returned early; did not time out.
+                if (elapsedWaitTime < remainingFrameTime && glfwGetTime() > returnToIdleTime && m_shouldUnlockFrameRate) {
+                    returnToIdleTime = glfwGetTime() + FrameRateUnlockDuration;
+                    targetFrameTime = maxFrameTime;
+                }
+                m_shouldUnlockFrameRate = false;
+
+                frameTime = newFrameTime;
+            }
+
+            auto exceedTime = frameTime - targetFrameTime;
+            if (!m_waitEventsBlocked)
+                longestExceededFrameTime = std::max(exceedTime, longestExceededFrameTime);
+            m_waitEventsBlocked = false;
+
+            if (std::fmod(frameTimeStart, 5.0) < 0.01) {
+                // Reset the longest exceeded frame time every 5 seconds
+                longestExceededFrameTime = 0.0;
+            }
+
+            while (frameTime < maxFrameTime) {
+                frameTime = glfwGetTime() - frameTimeStart;
+                std::this_thread::sleep_for(100us);
+            }
+
+            ImHexApi::System::impl::setLastFrameTime(glfwGetTime() - frameTimeStart);
         }
 
         // Hide the window as soon as the render loop exits to make the window
@@ -346,72 +370,44 @@ namespace hex {
     }
 
     void Window::frameBegin() {
-        // Run all deferred calls
-        TaskManager::runDeferredCalls();
+        auto &io = ImGui::GetIO();
+        ImHexApi::Fonts::getDefaultFont().push();
+        io.FontDefault = ImHexApi::Fonts::getDefaultFont();
 
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-
-        // Create font textures if necessary
-        {
-            const auto &fontDefinitions = ImHexApi::Fonts::impl::getFontDefinitions();
-            auto &currentFont = ImGui::GetIO().Fonts;
-            for (const auto &[name, font] : fontDefinitions) {
-                // If the texture for this atlas has been built already, don't do it again
-                if (font == nullptr || font->ContainerAtlas == nullptr || font->ContainerAtlas->TexID != 0)
-                    continue;
-
-                currentFont = font->ContainerAtlas;
-                ImGui_ImplOpenGL3_CreateFontsTexture();
-
-                for (ImFontConfig& fontCfg : font->ContainerAtlas->Sources) {
-                    if (fontCfg.FontData && fontCfg.FontDataOwnedByAtlas) {
-                        IM_FREE(fontCfg.FontData);
-                        fontCfg.FontData = NULL;
-                    }
-                }
-
-                currentFont->ClearTexData();
-            }
-
+        #if !defined(OS_WEB)
             {
-                auto font = ImHexApi::Fonts::getFont("hex.fonts.font.default");
+                static bool lastAnyWindowFocused = false;
+                bool anyWindowFocused = glfwGetWindowAttrib(m_window, GLFW_FOCUSED);
 
-                if (font == nullptr) {
-                    const auto &io = ImGui::GetIO();
-                    io.Fonts->Clear();
-
-                    ImFontConfig cfg;
-                    cfg.OversampleH = cfg.OversampleV = 1, cfg.PixelSnapH = true;
-                    cfg.SizePixels = ImHexApi::Fonts::DefaultFontSize;
-                    font = io.Fonts->AddFontDefault(&cfg);
-                    ImGui_ImplOpenGL3_CreateFontsTexture();
-
-                    for (ImFontConfig& fontCfg : font->ContainerAtlas->Sources) {
-                        if (fontCfg.FontData && fontCfg.FontDataOwnedByAtlas) {
-                            IM_FREE(fontCfg.FontData);
-                            fontCfg.FontData = NULL;
+                if (!anyWindowFocused) {
+                    const auto platformIo = ImGui::GetPlatformIO();
+                    for (auto *viewport : platformIo.Viewports) {
+                        if (platformIo.Platform_GetWindowFocus != nullptr && platformIo.Platform_GetWindowFocus(viewport)) {
+                            anyWindowFocused = true;
+                            break;
                         }
                     }
-
-                    io.Fonts->ClearTexData();
-                } else {
-                    currentFont = font->ContainerAtlas;
                 }
 
-                ImGui::SetCurrentFont(font);
+                if (lastAnyWindowFocused != anyWindowFocused)
+                    EventWindowFocused::post(anyWindowFocused);
+
+                lastAnyWindowFocused = anyWindowFocused;
             }
-        }
+        #endif
 
         // Start new ImGui Frame
-
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
         #if defined(IMGUI_TEST_ENGINE)
-            ImGuiTestEngine_ShowTestEngineWindows(m_testEngine, nullptr);
+            if (ImGuiExt::ImGuiTestEngine::isEnabled())
+                ImGuiTestEngine_ShowTestEngineWindows(m_testEngine, nullptr);
         #endif
 
-        TutorialManager::drawTutorial();
+        // Run all deferred calls
+        TaskManager::runDeferredCalls();
 
         EventFrameBegin::post();
 
@@ -513,43 +509,25 @@ namespace hex {
             }
         }
 
-        // Open popups when plugins requested it
-        // We retry every frame until the popup actually opens
-        // It might not open the first time because another popup is already open
-        {
-            std::scoped_lock lock(m_popupMutex);
-            m_popupsToOpen.remove_if([](const auto &name) {
-                if (ImGui::IsPopupOpen(name.c_str()))
-                    return true;
-                else
-                    ImGui::OpenPopup(name.c_str());
-
-                return false;
-            });
-        }
-
         // Draw popup stack
         {
             static bool positionSet = false;
             static bool sizeSet = false;
             static double popupDelay = -2.0;
             static u32 displayFrameCount = 0;
+            static bool popupClosed = true;
 
-            static std::unique_ptr<impl::PopupBase> currPopup;
+            static AutoReset<std::unique_ptr<impl::PopupBase>> currPopupStorage;
             static Lang name("");
 
-            AT_FIRST_TIME {
-                EventImHexClosing::subscribe([] {
-                    currPopup.reset();
-                });
-            };
+            auto &currPopup = *currPopupStorage;
 
             if (auto &popups = impl::PopupBase::getOpenPopups(); !popups.empty()) {
-                if (!ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopupId)) {
+                if (popupClosed) {
                     if (popupDelay <= -1.0) {
                         popupDelay = 0.2;
                     } else {
-                        popupDelay -= m_lastFrameTime;
+                        popupDelay -= io.DeltaTime;
                         if (popupDelay < 0 || popups.size() == 1) {
                             popupDelay = -2.0;
                             currPopup = std::move(popups.back());
@@ -557,10 +535,14 @@ namespace hex {
                             displayFrameCount = 0;
 
                             ImGui::OpenPopup(name);
+                            popupClosed = false;
+
                             popups.pop_back();
                         }
                     }
                 }
+            } else {
+                popupClosed = true;
             }
 
             if (currPopup != nullptr) {
@@ -625,34 +607,41 @@ namespace hex {
                     positionSet = sizeSet = false;
 
                     currPopup = nullptr;
+                    popupClosed = true;
                 }
             }
         }
 
+        TutorialManager::drawTutorial();
+
         // Draw Toasts
         {
             u32 index = 0;
+            float yOffset = 0;
             for (const auto &toast : impl::ToastBase::getQueuedToasts() | std::views::take(4)) {
-                const auto toastHeight = 60_scaled;
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5_scaled);
-                ImGui::SetNextWindowSize(ImVec2(350_scaled, toastHeight));
-                ImGui::SetNextWindowPos((ImHexApi::System::getMainWindowPosition() + ImHexApi::System::getMainWindowSize()) - scaled({ 10, 10 }) - scaled({ 0, (10 + toastHeight) * index }), ImGuiCond_Always, ImVec2(1, 1));
-                if (ImGui::Begin(hex::format("##Toast_{}", index).c_str(), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoFocusOnAppearing)) {
+                ImGui::SetNextWindowSize(ImVec2(350_scaled, 0));
+                ImGui::SetNextWindowPos((ImHexApi::System::getMainWindowPosition() + ImHexApi::System::getMainWindowSize()) - scaled({ 10, 10 }) - scaled({ 0, yOffset }), ImGuiCond_Always, ImVec2(1, 1));
+                ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, 100_scaled));
+                if (ImGui::Begin(fmt::format("##Toast_{}", index).c_str(), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoFocusOnAppearing)) {
                     auto drawList = ImGui::GetWindowDrawList();
 
                     const auto min = ImGui::GetWindowPos();
-                    const auto max = min + ImGui::GetWindowSize();
 
-                    drawList->PushClipRect(min, min + scaled({ 5, 60 }));
-                    drawList->AddRectFilled(min, max, toast->getColor(), 5_scaled);
-                    drawList->PopClipRect();
-
-                    ImGui::Indent();
+                    ImGui::Indent(5_scaled);
                     toast->draw();
                     ImGui::Unindent();
 
                     if (ImGui::IsWindowHovered() || toast->getAppearTime() <= 0)
                         toast->setAppearTime(ImGui::GetTime());
+
+                    const auto max = min + ImGui::GetWindowSize();
+
+                    drawList->PushClipRect(min, min + scaled({ 5, max.y - min.y }));
+                    drawList->AddRectFilled(min, max, toast->getColor(), 5_scaled);
+                    drawList->PopClipRect();
+
+                    yOffset += ImGui::GetWindowSize().y + 10_scaled;
                 }
                 ImGui::End();
                 ImGui::PopStyleVar();
@@ -672,21 +661,23 @@ namespace hex {
 
             const auto windowPos = ImHexApi::System::getMainWindowPosition();
             float startY = windowPos.y + ImGui::GetTextLineHeight() + ((ImGui::GetTextLineHeight() + (ImGui::GetStyle().FramePadding.y * 2.0F)) * (onWelcomeScreen ? 1 : 2));
-            const auto height = ImGui::GetTextLineHeightWithSpacing() * 1.5f;
+            const auto height = ImGui::GetTextLineHeightWithSpacing() * 1.5F;
 
-            // Offset banner based on the size of the title bar. On macOS it's slightly taller
+            // Offset banner based on the size of the title bar. On macOS, it's slightly taller
             #if defined(OS_MACOS)
                 startY += 2 * 8_scaled;
             #else
                 startY += 2 * ImGui::GetStyle().FramePadding.y;
             #endif
 
-            for (const auto &banner : impl::BannerBase::getOpenBanners() | std::views::take(5)) {
+            for (const auto &banner : impl::BannerBase::getOpenBanners() | std::views::take(3)) {
                 auto &style = ImGui::GetStyle();
                 ImGui::SetNextWindowPos(ImVec2(windowPos.x + 1_scaled, startY));
                 ImGui::SetNextWindowSize(ImVec2(ImHexApi::System::getMainWindowSize().x - 2_scaled, height));
                 ImGui::SetNextWindowViewport(viewport->ID);
-                ImGui::PushStyleColor(ImGuiCol_WindowBg, banner->getColor().Value);
+                const auto backgroundColor = banner->getColor().Value;
+                ImGui::PushStyleColor(ImGuiCol_WindowBg, backgroundColor);
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGuiExt::IsDarkBackground(backgroundColor) ? 0xFFFFFFFF : 0xFF000000);
                 auto prevShadowOffset = style.WindowShadowOffsetDist;
                 auto prevShadowAngle = style.WindowShadowOffsetAngle;
                 style.WindowShadowOffsetDist = 12_scaled;
@@ -708,7 +699,7 @@ namespace hex {
                     }
                 }
                 ImGui::End();
-                ImGui::PopStyleColor();
+                ImGui::PopStyleColor(2);
 
                 startY += height;
             }
@@ -724,62 +715,93 @@ namespace hex {
 
         ShortcutManager::resetLastActivatedMenu();
 
-        // Loop through all views and draw them
-        for (auto &[name, view] : ContentRegistry::Views::impl::getEntries()) {
-            ImGui::GetCurrentContext()->NextWindowData.ClearFlags();
+        if (const auto &fullScreenView = ContentRegistry::Views::impl::getFullScreenView(); fullScreenView == nullptr) {
 
-            // Draw always visible views
-            view->drawAlwaysVisibleContent();
+            // Loop through all views and draw them
+            static ImGuiWindow *nextFocusWindow = nullptr;
 
-            // Skip views that shouldn't be processed currently
-            if (!view->shouldProcess())
-                continue;
+            for (auto &[name, view] : ContentRegistry::Views::impl::getEntries() | std::views::reverse) {
+                ImGui::GetCurrentContext()->NextWindowData.ClearFlags();
 
-            const auto openViewCount = std::ranges::count_if(ContentRegistry::Views::impl::getEntries(), [](const auto &entry) {
-                const auto &[unlocalizedName, openView] = entry;
+                // Draw always visible views
+                view->drawAlwaysVisibleContent();
+                view->trackViewState();
 
-                return openView->hasViewMenuItemEntry() && openView->shouldProcess();
-            });
+                // Skip views that shouldn't be processed currently
+                if (!view->shouldProcess())
+                    continue;
 
-            ImGuiWindowClass windowClass = {};
+                const auto openViewCount = std::ranges::count_if(ContentRegistry::Views::impl::getEntries(), [](const auto &entry) {
+                    const auto &[unlocalizedName, openView] = entry;
 
-            windowClass.DockNodeFlagsOverrideSet |= ImGuiDockNodeFlags_NoCloseButton;
+                    return openView->hasViewMenuItemEntry() && openView->shouldProcess();
+                });
 
-            if (openViewCount <= 1 || LayoutManager::isLayoutLocked())
-                windowClass.DockNodeFlagsOverrideSet |= ImGuiDockNodeFlags_NoTabBar;
+                ImGuiWindowClass windowClass = {};
 
-            ImGui::SetNextWindowClass(&windowClass);
+                windowClass.DockNodeFlagsOverrideSet |= ImGuiDockNodeFlags_NoCloseButton;
 
-            auto window    = ImGui::FindWindowByName(view->getName().c_str());
-            if (window != nullptr && window->DockNode == nullptr)
-                ImGui::SetNextWindowBgAlpha(1.0F);
+                if (openViewCount <= 1 || LayoutManager::isLayoutLocked())
+                    windowClass.DockNodeFlagsOverrideSet |= ImGuiDockNodeFlags_NoTabBar;
 
-            // Draw view
-            view->draw();
-            view->trackViewOpenState();
+                ImGui::SetNextWindowClass(&windowClass);
 
-            if (view->getWindowOpenState()) {
-                // Get the currently focused view
-                if (window != nullptr && (window->Flags & ImGuiWindowFlags_Popup) != ImGuiWindowFlags_Popup) {
-                    auto windowName = View::toWindowName(name);
-                    ImGui::Begin(windowName.c_str());
+                auto window = ImGui::FindWindowByName(view->getName().c_str());
+                if (window != nullptr && window->DockNode == nullptr)
+                    ImGui::SetNextWindowBgAlpha(1.0F);
 
-                    // Detect if the window is focused
-                    const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy);
-                    view->setFocused(focused);
+                if (nextFocusWindow == window && !view->didWindowJustOpen() && !ImGui::IsPopupOpen(ImGuiID(0), ImGuiPopupFlags_AnyPopup)) {
+                    ImGui::SetNextWindowFocus();
+                    nextFocusWindow = nullptr;
+                }
 
-                    // Dock the window if it's not already docked
-                    if (view->didWindowJustOpen() && !ImGui::IsWindowDocked()) {
-                        ImGui::DockBuilderDockWindow(windowName.c_str(), ImHexApi::System::getMainDockSpaceId());
-                        EventViewOpened::post(view.get());
+                // Draw view
+                view->draw();
+
+                // If the window was just opened, it wasn't found above, so try to find it again
+                if (window == nullptr)
+                    window = ImGui::FindWindowByName(view->getName().c_str());
+
+                if (window != nullptr) {
+                    if (window->Appearing) {
+                        if (view->shouldDefaultFocus()) {
+                            nextFocusWindow = window;
+                        }
                     }
 
-                    // Pass on currently pressed keys to the shortcut handler
-                    for (const auto &key : m_pressedKeys) {
-                        ShortcutManager::process(view.get(), io.ConfigMacOSXBehaviors ? io.KeySuper : io.KeyCtrl, io.KeyAlt, io.KeyShift, io.ConfigMacOSXBehaviors ? io.KeyCtrl : io.KeySuper, focused, key);
-                    }
+                    if (view->getWindowOpenState()) {
+                        // Get the currently focused view
+                        auto windowName = View::toWindowName(name);
+                        bool focused = false;
 
-                    ImGui::End();
+                        const bool windowIsPopup = (window->Flags & ImGuiWindowFlags_Popup) == ImGuiWindowFlags_Popup;
+                        if (!windowIsPopup) {
+                            ImGui::Begin(windowName.c_str());
+
+                            // Detect if the window is focused
+                            focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy);
+                            view->setFocused(focused);
+                        }
+
+                        if (view->didWindowJustOpen()) {
+                            // Dock the window if it's not already docked
+                            if (!windowIsPopup && !ImGui::IsWindowDocked())
+                                ImGui::DockBuilderDockWindow(windowName.c_str(), ImHexApi::System::getMainDockSpaceId());
+
+                            EventViewOpened::post(view.get());
+                        }
+
+                        // Pass on currently pressed keys to the shortcut handler
+                        if (!windowIsPopup) {
+                            for (const auto &key : m_pressedKeys) {
+                                ShortcutManager::process(view.get(), io.ConfigMacOSXBehaviors ? io.KeySuper : io.KeyCtrl, io.KeyAlt, io.KeyShift, io.ConfigMacOSXBehaviors ? io.KeyCtrl : io.KeySuper, focused, key);
+                            }
+
+                            ImGui::End();
+                        }
+                    } else if (view->didWindowJustClose()) {
+                        EventViewClosed::post(view.get());
+                    }
                 }
             }
         }
@@ -800,6 +822,8 @@ namespace hex {
 
         this->endNativeWindowFrame();
 
+        ImHexApi::Fonts::getDefaultFont().pop();
+
         // Finalize ImGui frame
         ImGui::Render();
 
@@ -807,45 +831,49 @@ namespace hex {
         // If not, there's no point in sending the draw data off to the GPU and swapping buffers
         // NOTE: For anybody looking at this code and thinking "why not just hash the buffer and compare the hashes",
         // the reason is that hashing the buffer is significantly slower than just comparing the buffers directly.
-        // The buffer might become quite large if there's a lot of vertices on the screen but it's still usually less than
+        // The buffer might become quite large if there's a lot of vertices on the screen, but it's still usually less than
         // 10MB (out of which only the active portion needs to actually be compared) which is worth the ~60x speedup.
-        bool shouldRender = false;
-        {
+        bool shouldRender = [this] {
+            if (m_postProcessingShader.isValid() && m_postProcessingShader.hasUniform("Time"))
+                return true;
+
             static std::vector<u8> previousVtxData;
             static size_t previousVtxDataSize = 0;
 
+            size_t totalVtxDataSize = 0;
+
+            for (const auto *viewport : ImGui::GetPlatformIO().Viewports) {
+                const auto drawData = viewport->DrawData;
+                for (int n = 0; n < drawData->CmdListsCount; n++) {
+                    totalVtxDataSize += drawData->CmdLists[n]->VtxBuffer.size() * sizeof(ImDrawVert);
+                }
+            }
+
+            if (totalVtxDataSize != previousVtxDataSize) {
+                previousVtxDataSize = totalVtxDataSize;
+                previousVtxData.resize(totalVtxDataSize);
+                return true;
+            }
+
             size_t offset = 0;
-            size_t vtxDataSize = 0;
-
-            for (const auto viewPort : ImGui::GetPlatformIO().Viewports) {
-                auto drawData = viewPort->DrawData;
+            for (const auto *viewport : ImGui::GetPlatformIO().Viewports) {
+                const auto drawData = viewport->DrawData;
                 for (int n = 0; n < drawData->CmdListsCount; n++) {
-                    vtxDataSize += drawData->CmdLists[n]->VtxBuffer.size() * sizeof(ImDrawVert);
-                }
-            }
-            for (const auto viewPort : ImGui::GetPlatformIO().Viewports) {
-                auto drawData = viewPort->DrawData;
-                for (int n = 0; n < drawData->CmdListsCount; n++) {
-                    const ImDrawList *cmdList = drawData->CmdLists[n];
-                    std::string ownerName = cmdList->_OwnerName;
+                    const auto& vtxBuffer = drawData->CmdLists[n]->VtxBuffer;
+                    const std::size_t bufSize = vtxBuffer.size() * sizeof(ImDrawVert);
 
-                    if (vtxDataSize == previousVtxDataSize && (!ownerName.contains("##Popup") || !ownerName.contains("##image"))) {
-                        shouldRender = shouldRender || std::memcmp(previousVtxData.data() + offset, cmdList->VtxBuffer.Data, cmdList->VtxBuffer.size() * sizeof(ImDrawVert)) != 0;
-                    } else {
-                        shouldRender = true;
+                    if (std::memcmp(previousVtxData.data() + offset, vtxBuffer.Data, bufSize) != 0) {
+                        std::memcpy(previousVtxData.data() + offset, vtxBuffer.Data, bufSize);
+                        return true;
                     }
 
-                    if (previousVtxData.size() < offset + cmdList->VtxBuffer.size() * sizeof(ImDrawVert)) {
-                        previousVtxData.resize(offset + cmdList->VtxBuffer.size() * sizeof(ImDrawVert));
-                    }
-
-                    std::memcpy(previousVtxData.data() + offset, cmdList->VtxBuffer.Data, cmdList->VtxBuffer.size() * sizeof(ImDrawVert));
-                    offset += cmdList->VtxBuffer.size() * sizeof(ImDrawVert);
+                    offset += bufSize;
                 }
             }
 
-            previousVtxDataSize = vtxDataSize;
-        }
+            return false;
+        }();
+
 
         GLFWwindow *backupContext = glfwGetCurrentContext();
         ImGui::UpdatePlatformWindows();
@@ -879,7 +907,7 @@ namespace hex {
         auto* drawData = ImGui::GetDrawData();
 
         // Avoid accidentally clearing the viewport when the application is minimized,
-        // otherwise the OS will display an empty frame during deminimization on macOS
+        // otherwise the OS will display an empty frame during window restore on macOS
         if (drawData->DisplaySize.x != 0 && drawData->DisplaySize.y != 0) {
             int displayWidth, displayHeight;
             glfwGetFramebufferSize(m_window, &displayWidth, &displayHeight);
@@ -926,13 +954,13 @@ namespace hex {
             GLuint quadVAO, quadVBO;
             float quadVertices[] = {
                 // positions   // texCoords
-                -1.0f,  1.0f,  0.0f, 1.0f,
-                -1.0f, -1.0f,  0.0f, 0.0f,
-                 1.0f, -1.0f,  1.0f, 0.0f,
+                -1.0F,  1.0F,  0.0F, 1.0F,
+                -1.0F, -1.0F,  0.0F, 0.0F,
+                 1.0F, -1.0F,  1.0F, 0.0F,
 
-                -1.0f,  1.0f,  0.0f, 1.0f,
-                 1.0f, -1.0f,  1.0f, 0.0f,
-                 1.0f,  1.0f,  1.0f, 1.0f
+                -1.0F,  1.0F,  0.0F, 1.0F,
+                 1.0F, -1.0F,  1.0F, 0.0F,
+                 1.0F,  1.0F,  1.0F, 1.0F
             };
 
             glGenVertexArrays(1, &quadVAO);
@@ -941,12 +969,15 @@ namespace hex {
             glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
             glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
             glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
             glEnableVertexAttribArray(1);
             glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
             glBindVertexArray(0);
 
             m_postProcessingShader.bind();
+
+            m_postProcessingShader.setUniform("Time", static_cast<float>(glfwGetTime()));
+            m_postProcessingShader.setUniform("Resolution", gl::Vector<float, 2>{{ float(displayWidth), float(displayHeight) }});
 
             glBindVertexArray(quadVAO);
             glBindTexture(GL_TEXTURE_2D, texture);
@@ -962,23 +993,6 @@ namespace hex {
             glDeleteFramebuffers(1, &fbo);
         #endif
     }
-
-    void Window::unlockFrameRate() {
-        {
-            std::scoped_lock lock(m_wakeupMutex);
-            m_remainingUnlockedTime = std::chrono::seconds(2);
-        }
-
-        this->forceNewFrame();
-    }
-
-    void Window::forceNewFrame() {
-        std::scoped_lock lock(m_wakeupMutex);
-        m_wakeupFlag = true;
-        m_wakeupCondVar.notify_all();
-    }
-
-
 
     void Window::initGLFW() {
         auto initialWindowProperties = ImHexApi::System::getInitialWindowProperties();
@@ -997,15 +1011,17 @@ namespace hex {
 
             try {
                 log::error("GLFW Error [0x{:05X}] : {}", error, desc);
-            } catch (const std::system_error &) {
+            } catch (const std::system_error &) { //NOLINT(bugprone-empty-catch): we can't log it
                 // Catch and ignore system error that might be thrown when too many errors are being logged to a file
             }
         });
 
-        configureGLFW();
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+        glfwWindowHint(GLFW_FLOATING, GLFW_FALSE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
         glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+        configureGLFW();
 
         if (initialWindowProperties.has_value()) {
             glfwWindowHint(GLFW_MAXIMIZED, initialWindowProperties->maximized);
@@ -1092,6 +1108,14 @@ namespace hex {
             win->unlockFrameRate();
         };
 
+        static const auto markWaitEventsBlocked = [](GLFWwindow *, auto ...) {
+            auto win = static_cast<Window *>(glfwGetWindowUserPointer(ImHexApi::System::getMainWindowHandle()));
+            if (win == nullptr)
+                return;
+
+            win->m_waitEventsBlocked = true;
+        };
+
         static const auto isMainWindow = [](GLFWwindow *window) {
             return window == ImHexApi::System::getMainWindowHandle();
         };
@@ -1099,6 +1123,7 @@ namespace hex {
         // Register window move callback
         glfwSetWindowPosCallback(m_window, [](GLFWwindow *window, int x, int y) {
             unlockFrameRate(window);
+            markWaitEventsBlocked(window);
 
             if (!isMainWindow(window)) return;
 
@@ -1108,11 +1133,13 @@ namespace hex {
             glfwGetWindowSize(window, &width, &height);
             ImHexApi::System::impl::setMainWindowPosition(x, y);
             ImHexApi::System::impl::setMainWindowSize(width, height);
+
         });
 
         // Register window resize callback
         glfwSetWindowSizeCallback(m_window, [](GLFWwindow *window, [[maybe_unused]] int width, [[maybe_unused]] int height) {
             unlockFrameRate(window);
+            markWaitEventsBlocked(window);
 
             if (!isMainWindow(window)) return;
 
@@ -1139,10 +1166,9 @@ namespace hex {
         glfwSetCursorPosCallback(m_window, unlockFrameRate);
         glfwSetMouseButtonCallback(m_window, unlockFrameRate);
         glfwSetScrollCallback(m_window, unlockFrameRate);
-
         glfwSetWindowFocusCallback(m_window, [](GLFWwindow *window, int focused) {
             unlockFrameRate(window);
-            EventWindowFocused::post(focused == GLFW_TRUE);
+            ImHexApi::System::impl::setMainWindowFocusState(focused);
         });
 
         glfwSetWindowMaximizeCallback(m_window, [](GLFWwindow *window, int) {
@@ -1219,66 +1245,6 @@ namespace hex {
         });
 
         glfwSetWindowSizeLimits(m_window, 480_scaled, 360_scaled, GLFW_DONT_CARE, GLFW_DONT_CARE);
-
-        m_frameRateThread = std::jthread([this](const std::stop_token &stopToken) {
-            using Duration = std::chrono::duration<double, std::nano>;
-            Duration passedTime = {};
-
-            std::chrono::steady_clock::time_point startTime = {}, endTime = {};
-            Duration requestedFrameTime = {};
-            float targetFps = 0;
-
-            const auto nativeFps = []() -> float {
-                if (const auto monitor = glfwGetPrimaryMonitor(); monitor != nullptr) {
-                    if (const auto videoMode = glfwGetVideoMode(monitor); videoMode != nullptr) {
-                        return videoMode->refreshRate;
-                    }
-                }
-
-                return 60;
-            }();
-
-            while (!stopToken.stop_requested()) {
-                const auto iterationTime = endTime - startTime;
-                startTime = std::chrono::steady_clock::now();
-
-                targetFps = ImHexApi::System::getTargetFPS();
-
-                // If the target frame rate is below 15, use the current monitor's refresh rate
-                if (targetFps < 15) {
-                    targetFps = nativeFps;
-                }
-
-                passedTime += iterationTime;
-                {
-                    std::scoped_lock lock(m_sleepMutex);
-
-                    if (m_remainingUnlockedTime > std::chrono::nanoseconds(0)) {
-                        m_remainingUnlockedTime -= iterationTime;
-                    } else {
-                        targetFps = 5;
-                    }
-
-                    requestedFrameTime = (Duration(1.0E9) / targetFps) / 1.3;
-                    if (passedTime >= requestedFrameTime) {
-                        m_sleepFlag = true;
-                        m_sleepCondVar.notify_all();
-
-                        passedTime = {};
-                    }
-                }
-
-                {
-                    std::unique_lock lock(m_wakeupMutex);
-                    m_wakeupCondVar.wait_for(lock, requestedFrameTime, [&] {
-                        return m_wakeupFlag || stopToken.stop_requested();
-                    });
-                    m_wakeupFlag = false;
-                }
-
-                endTime = std::chrono::steady_clock::now();
-            }
-        });
     }
 
     void Window::resize(i32 width, i32 height) {
@@ -1296,7 +1262,7 @@ namespace hex {
 
         #if defined(IMGUI_TEST_ENGINE)
             m_testEngine = ImGuiTestEngine_CreateContext();
-            auto testEngineIo = ImGuiTestEngine_GetIO(m_testEngine);
+            auto &testEngineIo = ImGuiTestEngine_GetIO(m_testEngine);
             testEngineIo.ConfigVerboseLevel = ImGuiTestVerboseLevel_Info;
             testEngineIo.ConfigVerboseLevelOnError = ImGuiTestVerboseLevel_Debug;
 
@@ -1312,13 +1278,17 @@ namespace hex {
 
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
         io.ConfigWindowsMoveFromTitleBarOnly = true;
-        io.FontGlobalScale = 1.0F;
-
-        ImGui::GetCurrentContext()->FontAtlasOwnedByContext = false;
+        io.ConfigDragClickToInputText = true;
 
         if (glfwGetPrimaryMonitor() != nullptr) {
-            if (ImHexApi::System::isMutliWindowModeEnabled())
+            if (ImHexApi::System::isMultiWindowModeEnabled()) {
                 io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+
+                // Enable viewport window OS decorations on Linux so that the window can be moved around on Wayland
+                #if defined (OS_LINUX)
+                    io.ConfigViewportsNoDecoration = false;
+                #endif
+            }
         }
 
         io.ConfigViewportsNoTaskBarIcon = false;
@@ -1334,8 +1304,8 @@ namespace hex {
 
         io.UserData = &m_imguiCustomData;
 
-        auto scale = ImHexApi::System::getGlobalScale();
-        style.ScaleAllSizes(scale);
+        style.ScaleAllSizes(ImHexApi::System::getGlobalScale());
+        auto scale = ImHexApi::System::getNativeScale();
         io.DisplayFramebufferScale = ImVec2(scale, scale);
 
         style.WindowMenuButtonPosition = ImGuiDir_None;
@@ -1381,7 +1351,11 @@ namespace hex {
             ImGui_ImplOpenGL3_Init();
             ImGui_ImplGlfw_InstallEmscriptenCallbacks(m_window, "#canvas");
         #else
-            ImGui_ImplOpenGL3_Init("#version 410");
+            if (ImHexApi::System::getGLVersion() >= SemanticVersion(4,1,0)) {
+                ImGui_ImplOpenGL3_Init("#version 410");
+            } else {
+                ImGui_ImplOpenGL3_Init("#version 130");
+            }
         #endif
 
         ImGui_ImplGlfw_SetCallbacksChainForAllWindows(true);

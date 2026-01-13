@@ -1,6 +1,6 @@
 #include "content/views/view_theme_manager.hpp"
 
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
 #include <hex/api/theme_manager.hpp>
 #include <hex/api/events/events_interaction.hpp>
 
@@ -9,8 +9,8 @@
 
 namespace hex::plugin::builtin {
 
-    ViewThemeManager::ViewThemeManager() : View::Floating("hex.builtin.view.theme_manager.name") {
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.extras", "hex.builtin.view.theme_manager.name" }, ICON_VS_SYMBOL_COLOR, 2000, Shortcut::None, [&, this] {
+    ViewThemeManager::ViewThemeManager() : View::Floating("hex.builtin.view.theme_manager.name", ICON_VS_SYMBOL_COLOR) {
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.extras", "hex.builtin.view.theme_manager.name" }, ICON_VS_SYMBOL_COLOR, 2000, Shortcut::None, [&, this] {
             this->getWindowOpenState() = true;
         });
     }
@@ -125,6 +125,10 @@ namespace hex::plugin::builtin {
                 outputFile.writeString(json.dump(4));
             });
         }
+    }
+
+    void ViewThemeManager::drawHelpText() {
+        ImGuiExt::TextFormattedWrapped("This view allows you to customize the colors and styles of the ImHex interface. You can modify individual colors and styles and save them as themes that you can load later or share with others.");
     }
 
 }

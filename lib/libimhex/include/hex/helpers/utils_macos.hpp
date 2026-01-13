@@ -30,6 +30,9 @@
         bool macosIsMainInstance();
         void macosSendMessageToMainInstance(const unsigned char *data, size_t size);
         void macosInstallEventListener();
+
+        void toastMessageMacos(const char *title, const char *message);
+        void macosSetupDockMenu(void);
     }
 
 #endif

@@ -4,7 +4,6 @@
     #include <emscripten/html5.h>
     #include <GLFW/glfw3.h>
 
-    #include <hex/api/imhex_api.hpp>
     #include <hex/api/events/requests_lifecycle.hpp>
     #include <hex/api/task_manager.hpp>
 
@@ -25,6 +24,12 @@
         }
 
         int runImHex() {
+            // Initialize GLFW
+            if (!glfwInit()) {
+                log::fatal("Failed to initialize GLFW!");
+                std::abort();
+            }
+
             static std::unique_ptr<init::WindowSplash> splashWindow;
             splashWindow = initializeImHex();
 
@@ -38,8 +43,13 @@
             emscripten_set_main_loop_arg([](void *arg) {
                 auto &splashWindow = *reinterpret_cast<std::unique_ptr<init::WindowSplash>*>(arg);
 
-                FrameResult frameResult = splashWindow->fullFrame();
-                if (frameResult == FrameResult::Success) {
+                const auto result = splashWindow->loop();
+
+                // If no result was returned yet, keep looping
+                if (!result.has_value())
+                    return;
+
+                if (*result) {
                     handleFileOpenRequest();
 
                     // Clean up everything after the main window is closed
@@ -59,7 +69,7 @@
                             return "";
                         } catch (const std::exception &e) {
                             static std::string message;
-                            message = hex::format("Failed to deinitialize ImHex!\nThis is just a message warning you of this, the application has already closed, you probably can't do anything about it.\n\nError: {}", e.what());
+                            message = fmt::format("Failed to deinitialize ImHex!\nThis is just a message warning you of this, the application has already closed, you probably can't do anything about it.\n\nError: {}", e.what());
                             return message.c_str();
                         }
                     });
@@ -79,9 +89,14 @@
                     static std::optional<Window> window;
                     window.emplace();
 
+                    initializationFinished();
+
                     emscripten_set_main_loop([]() {
                         window->fullFrame();
                     }, 60, 0);
+                } else {
+                    log::fatal("Failed to initialize ImHex!");
+                    std::abort();
                 }
             }, &splashWindow, 60, 0);
 

@@ -1,4 +1,5 @@
-#include <hex/api/content_registry.hpp>
+#include <algorithm>
+#include <hex/api/content_registry/data_processor.hpp>
 #include <hex/data_processor/node.hpp>
 
 #include <ranges>
@@ -159,21 +160,21 @@ namespace hex::plugin::builtin {
             for (u8 &b : data)
                 b = BitFlipLookup[b & 0xf] << 4 | BitFlipLookup[b >> 4];
 
-            std::reverse(data.begin(), data.end());
+            std::ranges::reverse(data);
             this->setBufferOnOutput(1, data);
         }
 
     };
     
     void registerLogicDataProcessorNodes() {
-        ContentRegistry::DataProcessorNode::add<NodeBitwiseADD>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.add");
-        ContentRegistry::DataProcessorNode::add<NodeBitwiseAND>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.and");
-        ContentRegistry::DataProcessorNode::add<NodeBitwiseOR>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.or");
-        ContentRegistry::DataProcessorNode::add<NodeBitwiseXOR>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.xor");
-        ContentRegistry::DataProcessorNode::add<NodeBitwiseNOT>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.not");
-        ContentRegistry::DataProcessorNode::add<NodeBitwiseShiftLeft>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.shift_left");
-        ContentRegistry::DataProcessorNode::add<NodeBitwiseShiftRight>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.shift_right");
-        ContentRegistry::DataProcessorNode::add<NodeBitwiseSwap>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.swap");   
+        ContentRegistry::DataProcessor::add<NodeBitwiseADD>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.add");
+        ContentRegistry::DataProcessor::add<NodeBitwiseAND>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.and");
+        ContentRegistry::DataProcessor::add<NodeBitwiseOR>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.or");
+        ContentRegistry::DataProcessor::add<NodeBitwiseXOR>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.xor");
+        ContentRegistry::DataProcessor::add<NodeBitwiseNOT>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.not");
+        ContentRegistry::DataProcessor::add<NodeBitwiseShiftLeft>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.shift_left");
+        ContentRegistry::DataProcessor::add<NodeBitwiseShiftRight>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.shift_right");
+        ContentRegistry::DataProcessor::add<NodeBitwiseSwap>("hex.builtin.nodes.bitwise", "hex.builtin.nodes.bitwise.swap");
     }
 
 }

@@ -1,5 +1,7 @@
-#include <hex/api/content_registry.hpp>
-#include <hex/api/localization_manager.hpp>
+#include <hex/api/imhex_api/provider.hpp>
+#include <hex/api/content_registry/communication_interface.hpp>
+#include <hex/api/content_registry/settings.hpp>
+#include <hex/api/content_registry/background_services.hpp>
 #include <hex/api/events/events_provider.hpp>
 #include <hex/api/events/events_lifecycle.hpp>
 #include <hex/api/project_file_manager.hpp>
@@ -15,11 +17,13 @@
 
 #include <fmt/chrono.h>
 #include <nlohmann/json.hpp>
+#include <romfs/romfs.hpp>
+#include <toasts/toast_notification.hpp>
 
 namespace hex::plugin::builtin {
 
-    static bool s_networkInterfaceServiceEnabled = false;
-    static int s_autoBackupTime = 0;
+    static ContentRegistry::Settings::SettingsVariable<bool, "hex.builtin.setting.general", "hex.builtin.setting.general.network_interface"> s_networkInterfaceServiceEnabled = false;
+    static ContentRegistry::Settings::SettingsVariable<int, "hex.builtin.setting.general", "hex.builtin.setting.general.backups.auto_backup_time"> s_autoBackupTime = 0;
 
     namespace {
 
@@ -71,7 +75,7 @@ namespace hex::plugin::builtin {
             auto now = std::chrono::steady_clock::now();
             static std::chrono::time_point<std::chrono::steady_clock> lastBackupTime = now;
 
-            if (s_autoBackupTime > 0 && (now - lastBackupTime) > std::chrono::seconds(s_autoBackupTime)) {
+            if (s_autoBackupTime > 0 && (now - lastBackupTime) > std::chrono::seconds(s_autoBackupTime * 30)) {
                 lastBackupTime = now;
 
                 if (ImHexApi::Provider::isValid() && s_dataDirty) {
@@ -85,7 +89,7 @@ namespace hex::plugin::builtin {
                     }
 
                     for (const auto &path : paths::Backups.write()) {
-                        const auto backupPath = path / hex::format("auto_backup.{:%y%m%d_%H%M%S}.hexproj", fmt::gmtime(std::chrono::system_clock::now()));
+                        const auto backupPath = path / fmt::format("auto_backup.{:%y%m%d_%H%M%S}.hexproj", fmt::gmtime(std::chrono::system_clock::now()));
                         if (ProjectFile::store(backupPath, false)) {
                             log::info("Created auto-backup file '{}'", wolv::util::toUTF8String(backupPath));
                             break;
@@ -101,19 +105,30 @@ namespace hex::plugin::builtin {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
+        void handleMCPServer() {
+            if (!ContentRegistry::MCP::isEnabled()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                ContentRegistry::MCP::impl::getMcpServerInstance()->disconnect();
+                return;
+            }
+
+            ContentRegistry::MCP::impl::getMcpServerInstance()->listen();
+        }
+
     }
 
     void registerBackgroundServices() {
-        ContentRegistry::Settings::onChange("hex.builtin.setting.general", "hex.builtin.setting.general.network_interface", [](const ContentRegistry::Settings::SettingsValue &value) {
-            s_networkInterfaceServiceEnabled = value.get<bool>(false);
-        });
-
-        ContentRegistry::Settings::onChange("hex.builtin.setting.general", "hex.builtin.setting.general.auto_backup_time", [](const ContentRegistry::Settings::SettingsValue &value) {
-            s_autoBackupTime = value.get<int>(0) * 30;
+        ContentRegistry::Settings::onChange("hex.builtin.setting.general", "hex.builtin.setting.general.mcp_server", [](const ContentRegistry::Settings::SettingsValue &value) {
+            ContentRegistry::MCP::impl::setEnabled(value.get<bool>(false));
         });
 
         ContentRegistry::BackgroundServices::registerService("hex.builtin.background_service.network_interface", handleNetworkInterfaceService);
         ContentRegistry::BackgroundServices::registerService("hex.builtin.background_service.auto_backup", handleAutoBackup);
+        ContentRegistry::BackgroundServices::registerService("hex.builtin.background_service.mcp", handleMCPServer);
+
+        EventImHexClosing::subscribe([] {
+            ContentRegistry::MCP::impl::getMcpServerInstance().reset();
+        });
 
         EventProviderDirtied::subscribe([](prv::Provider *) {
             s_dataDirty = true;

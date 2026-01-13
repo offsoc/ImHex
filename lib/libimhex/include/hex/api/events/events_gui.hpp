@@ -4,17 +4,15 @@
 
 /* Forward declarations */
 struct GLFWwindow;
+using ImGuiID = unsigned int;
 namespace hex { class View; }
 
 /* GUI events definitions */
 namespace hex {
-
     /**
-     * @brief Signals a newly opened window
+     * @brief Signals a newly opened view
      *
-     * This event is sent when the window has just been opened and docked by the Window manager.
-     *
-     * FIXME: In the event that a newly created window is already docked, this will not be sent.
+     * This event is sent when the view has just been opened by the Window manager.
      *
      * FIXME: This is currently only used for the introduction tutorial.
      *  If the event's only purpose is this, maybe rename it?
@@ -22,6 +20,15 @@ namespace hex {
      * @param view the new view reference
      */
     EVENT_DEF(EventViewOpened, View*);
+
+    /**
+     * @brief Signals a newly closed view
+     *
+     * This event is sent when the view has just been closed.
+     *
+     * @param view the closed view reference
+     */
+    EVENT_DEF(EventViewClosed, View*);
 
     /**
      * @brief Signals a change in the DPI scale.
@@ -53,15 +60,6 @@ namespace hex {
      * @param window The window reference
      */
     EVENT_DEF(EventWindowClosing, GLFWwindow*);
-
-    /**
-     * @brief Informs that the main window is initialized
-     *
-     * On Windows OS, it is used to initialize system theme, if ImHex's theme is following it.
-     *
-     * FIXME: Change event name to reflect Theme detection, if it's only used for that purpose?
-     */
-    EVENT_DEF(EventWindowInitialized);
 
     /**
      * @brief Informs that the main window is deinitializing

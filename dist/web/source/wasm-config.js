@@ -59,8 +59,14 @@ monkeyPatch((file, done) =>  {
     const mibTotal = (wasmSize / 1024**2).toFixed(1);
 
     let root = document.querySelector(':root');
-    root.style.setProperty("--progress", `${percent}%`)
-    document.getElementById("progress-bar-content").innerHTML = `${percent}% &nbsp;[${mibNow} MiB / ${mibTotal} MiB]`;
+    if (root != null) {
+        root.style.setProperty("--progress", `${percent}%`)
+        let progressBar = document.getElementById("progress-bar-content");
+
+        if (progressBar != null) {
+            progressBar.innerHTML = `${percent}% &nbsp;[${mibNow} MiB / ${mibTotal} MiB]`;
+        }
+    }
 });
 
 function glfwSetCursorCustom(wnd, shape) {
@@ -100,7 +106,9 @@ var notWorkingTimer = setTimeout(() => {
 }, 5000);
 
 var Module = {
-    preRun:  [],
+    preRun:  () => {
+        ENV.IMHEX_SKIP_SPLASH_SCREEN = "1";
+    },
     postRun: function() {
         // Patch the emscripten GLFW module to send mouse and touch events in the right order
         // For ImGui interactions to correctly work with touch input, MousePos events need
@@ -158,7 +166,7 @@ var Module = {
             if (status == 1) {
                 GLFW.active.buttons |= (1 << eventButton);
                 try {
-                    event.target.setCapture();
+                    event.target.setPointerCapture(event.pointerId);
                 } catch (e) {}
             } else {
                 GLFW.active.buttons &= ~(1 << eventButton);
@@ -174,7 +182,9 @@ var Module = {
     },
     onRuntimeInitialized: function() {
         // Triggered when the wasm module is loaded and ready to use.
-        document.getElementById("loading").style.display = "none"
+        let loading = document.getElementById("loading");
+        if (loading != null)
+            document.getElementById("loading").style.display = "none"
         document.getElementById("canvas").style.display = "initial"
 
         clearTimeout(notWorkingTimer);
@@ -187,6 +197,8 @@ var Module = {
             alert('WebGL context lost, please reload the page');
             e.preventDefault();
         }, false);
+
+        js_resizeCanvas()
 
         // Turn long touches into right-clicks
         let timer = null;
@@ -251,17 +263,23 @@ const urlParams = new URLSearchParams(queryString);
 if (urlParams.has("lang")) {
     Module["arguments"].push("--language");
     Module["arguments"].push(urlParams.get("lang"));
+} else if (urlParams.has("save-editor")) {
+    Module["arguments"].push("--save-editor");
+    Module["arguments"].push("gist");
+    Module["arguments"].push(urlParams.get("save-editor"));
 }
 
-window.addEventListener('resize', js_resizeCanvas, false);
 function js_resizeCanvas() {
     let canvas = document.getElementById('canvas');
 
-    canvas.top    = document.documentElement.clientTop;
-    canvas.left   = document.documentElement.clientLeft;
-    canvas.width  = Math.min(document.documentElement.clientWidth, window.innerWidth || 0);
-    canvas.height = Math.min(document.documentElement.clientHeight, window.innerHeight || 0);
+    canvas.top    = canvas.parentElement.clientTop;
+    canvas.left   = canvas.parentElement.clientLeft;
+
+    canvas.style.width  = "100%";
+    canvas.style.height = "100%";
 }
+let resizeObserver = new ResizeObserver(js_resizeCanvas);
+resizeObserver.observe(document.getElementById("canvas"))
 
 // Prevent some default browser shortcuts from preventing ImHex ones to work
 document.addEventListener('keydown', e => {

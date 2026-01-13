@@ -13,41 +13,10 @@ namespace hex::plugin::builtin {
 
         void drawContent() override;
         [[nodiscard]] ImGuiWindowFlags getWindowFlags() const override {
-            return ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+            return ImGuiWindowFlags_NoNavInputs;
         }
 
-        class Popup {
-        public:
-            virtual ~Popup() = default;
-            virtual void draw(ViewHexEditor *editor) = 0;
-
-            [[nodiscard]] virtual UnlocalizedString getTitle() const { return {}; }
-
-            [[nodiscard]] virtual bool canBePinned() const { return false; }
-            [[nodiscard]] bool isPinned() const { return m_isPinned; }
-            void setPinned(const bool pinned) { m_isPinned = pinned; }
-        private:
-            bool m_isPinned = false;
-        };
-
-        [[nodiscard]] bool isAnyPopupOpen() const {
-            return m_currPopup != nullptr;
-        }
-
-        template<std::derived_from<Popup> T>
-        [[nodiscard]] bool isPopupOpen() const {
-            return dynamic_cast<T*>(m_currPopup.get()) != nullptr;
-        }
-
-        template<std::derived_from<Popup> T, typename ... Args>
-        void openPopup(Args && ...args) {
-            m_currPopup = std::make_unique<T>(std::forward<Args>(args)...);
-            m_shouldOpenPopup = true;
-        }
-
-        void closePopup() {
-            m_currPopup.reset();
-        }
+        bool shouldDefaultFocus() const override { return true; }
 
         bool isSelectionValid() const {
             return m_hexEditor.isSelectionValid();
@@ -72,6 +41,45 @@ namespace hex::plugin::builtin {
         void jumpIfOffScreen() {
             m_hexEditor.jumpIfOffScreen();
         }
+
+    public:
+        class Popup {
+        public:
+            virtual ~Popup() = default;
+            virtual void draw(ViewHexEditor *editor) = 0;
+
+            [[nodiscard]] virtual UnlocalizedString getTitle() const { return {}; }
+
+            [[nodiscard]] virtual bool canBePinned() const { return false; }
+            [[nodiscard]] bool isPinned() const { return m_isPinned; }
+            void setPinned(const bool pinned) { m_isPinned = pinned; }
+
+            [[nodiscard]] virtual ImGuiWindowFlags getFlags() const { return ImGuiWindowFlags_AlwaysAutoResize; }
+
+        private:
+            bool m_isPinned = false;
+        };
+
+        [[nodiscard]] bool isAnyPopupOpen() const {
+            return m_currPopup != nullptr;
+        }
+
+        template<std::derived_from<Popup> T>
+        [[nodiscard]] bool isPopupOpen() const {
+            return dynamic_cast<T*>(m_currPopup.get()) != nullptr;
+        }
+
+        template<std::derived_from<Popup> T, typename ... Args>
+        void openPopup(Args && ...args) {
+            m_currPopup = std::make_unique<T>(std::forward<Args>(args)...);
+            m_shouldOpenPopup = true;
+        }
+
+        void closePopup() {
+            m_currPopup.reset();
+        }
+
+        void drawHelpText() override;
 
     private:
         void drawPopup();

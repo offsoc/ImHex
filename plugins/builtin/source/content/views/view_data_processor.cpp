@@ -1,7 +1,10 @@
 #include "content/views/view_data_processor.hpp"
+#include <algorithm>
 #include <toasts/toast_notification.hpp>
 
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/data_processor.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
+#include <hex/api/content_registry/file_type_handler.hpp>
 #include <hex/api/project_file_manager.hpp>
 #include <hex/api/achievement_manager.hpp>
 
@@ -50,9 +53,9 @@ namespace hex::plugin::builtin {
 
         void setValue(auto value) { m_value = std::move(value); }
 
-        const std::string &getName() const { return m_name; }
+        [[nodiscard]] const std::string &getName() const { return m_name; }
 
-        dp::Attribute::Type getType() const {
+        [[nodiscard]] dp::Attribute::Type getType() const {
             switch (m_type) {
                 default:
                 case 0: return dp::Attribute::Type::Integer;
@@ -119,8 +122,8 @@ namespace hex::plugin::builtin {
             ImGui::PopItemWidth();
         }
 
-        const std::string &getName() const { return m_name; }
-        dp::Attribute::Type getType() const {
+        [[nodiscard]] const std::string &getName() const { return m_name; }
+        [[nodiscard]] dp::Attribute::Type getType() const {
             switch (m_type) {
                 case 0: return dp::Attribute::Type::Integer;
                 case 1: return dp::Attribute::Type::Float;
@@ -137,7 +140,7 @@ namespace hex::plugin::builtin {
             }
         }
 
-        const auto& getValue() const { return m_value; }
+        [[nodiscard]] const auto& getValue() const { return m_value; }
 
         void store(nlohmann::json &j) const override {
             j = nlohmann::json::object();
@@ -312,7 +315,7 @@ namespace hex::plugin::builtin {
         }
 
     private:
-        std::vector<dp::Attribute> findAttributes() const {
+        [[nodiscard]] std::vector<dp::Attribute> findAttributes() const {
             std::vector<dp::Attribute> result;
 
             // Search through all nodes in the workspace and add all input and output nodes to the result
@@ -326,7 +329,7 @@ namespace hex::plugin::builtin {
             return result;
         }
 
-        NodeCustomInput* findInput(const std::string &name) const {
+        [[nodiscard]] NodeCustomInput* findInput(const std::string &name) const {
             for (auto &node : m_workspace.nodes) {
                 if (auto *inputNode = dynamic_cast<NodeCustomInput*>(node.get()); inputNode != nullptr && inputNode->getName() == name)
                     return inputNode;
@@ -335,7 +338,7 @@ namespace hex::plugin::builtin {
             return nullptr;
         }
 
-        NodeCustomOutput* findOutput(const std::string &name) const {
+        [[nodiscard]] NodeCustomOutput* findOutput(const std::string &name) const {
             for (auto &node : m_workspace.nodes) {
                 if (auto *outputNode = dynamic_cast<NodeCustomOutput*>(node.get()); outputNode != nullptr && outputNode->getName() == name)
                     return outputNode;
@@ -355,9 +358,9 @@ namespace hex::plugin::builtin {
     };
 
     ViewDataProcessor::ViewDataProcessor() : View::Window("hex.builtin.view.data_processor.name", ICON_VS_CHIP) {
-        ContentRegistry::DataProcessorNode::add<NodeCustom>("hex.builtin.nodes.custom", "hex.builtin.nodes.custom.custom", this);
-        ContentRegistry::DataProcessorNode::add<NodeCustomInput>("hex.builtin.nodes.custom", "hex.builtin.nodes.custom.input");
-        ContentRegistry::DataProcessorNode::add<NodeCustomOutput>("hex.builtin.nodes.custom", "hex.builtin.nodes.custom.output");
+        ContentRegistry::DataProcessor::add<NodeCustom>("hex.builtin.nodes.custom", "hex.builtin.nodes.custom.custom", this);
+        ContentRegistry::DataProcessor::add<NodeCustomInput>("hex.builtin.nodes.custom", "hex.builtin.nodes.custom.input");
+        ContentRegistry::DataProcessor::add<NodeCustomOutput>("hex.builtin.nodes.custom", "hex.builtin.nodes.custom.output");
 
         ProjectFile::registerPerProviderHandler({
             .basePath = "data_processor.json",
@@ -398,7 +401,7 @@ namespace hex::plugin::builtin {
         });
 
         /* Import Nodes */
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.file", "hex.builtin.menu.file.import", "hex.builtin.menu.file.import.data_processor" }, ICON_VS_CHIP, 4050, Shortcut::None, [this]{
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.file", "hex.builtin.menu.file.import", "hex.builtin.menu.file.import.data_processor" }, ICON_VS_CHIP, 5600, Shortcut::None, [this]{
             fs::openFileBrowser(fs::DialogMode::Open, { {"hex.builtin.view.data_processor.name"_lang, "hexnode" } },
                                 [&](const std::fs::path &path) {
                                     wolv::io::File file(path, wolv::io::File::Mode::Read);
@@ -410,7 +413,7 @@ namespace hex::plugin::builtin {
         }, ImHexApi::Provider::isValid);
 
         /* Export Nodes */
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.file", "hex.builtin.menu.file.export", "hex.builtin.menu.file.export.data_processor" }, ICON_VS_CHIP, 8050, Shortcut::None, [this]{
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.file", "hex.builtin.menu.file.export", "hex.builtin.menu.file.export.data_processor" }, ICON_VS_CHIP, 8050, Shortcut::None, [this]{
             fs::openFileBrowser(fs::DialogMode::Save, { {"hex.builtin.view.data_processor.name"_lang, "hexnode" } },
                                 [&, this](const std::fs::path &path) {
                                     wolv::io::File file(path, wolv::io::File::Mode::Create);
@@ -421,7 +424,7 @@ namespace hex::plugin::builtin {
             return ImHexApi::Provider::isValid() && !m_workspaceStack->empty() && !m_workspaceStack->back()->nodes.empty();
         });
 
-        ContentRegistry::FileHandler::add({ ".hexnode" }, [this](const auto &path) {
+        ContentRegistry::FileTypeHandler::add({ ".hexnode" }, [this](const auto &path) {
             wolv::io::File file(path, wolv::io::File::Mode::Read);
             if (!file.isValid()) return false;
 
@@ -443,7 +446,7 @@ namespace hex::plugin::builtin {
 
     void ViewDataProcessor::eraseLink(Workspace &workspace, int id) {
         // Find the link with the given ID
-        auto link = std::find_if(workspace.links.begin(), workspace.links.end(),
+        auto link = std::ranges::find_if(workspace.links,
                                  [&id](auto link) {
                                      return link.getId() == id;
                                  });
@@ -470,7 +473,7 @@ namespace hex::plugin::builtin {
         // and remove all links that are connected to the attributes of the node
         for (int id : ids) {
             // Find the node with the given ID
-            auto node = std::find_if(workspace.nodes.begin(), workspace.nodes.end(),
+            auto node = std::ranges::find_if(workspace.nodes,
                                     [&id](const auto &node) {
                                         return node->getId() == id;
                                     });
@@ -493,7 +496,7 @@ namespace hex::plugin::builtin {
         // and remove the nodes from the workspace
         for (int id : ids) {
             // Find the node with the given ID
-            auto node = std::find_if(workspace.nodes.begin(), workspace.nodes.end(),
+            auto node = std::ranges::find_if(workspace.nodes,
                                      [&id](const auto &node) {
                                          return node->getId() == id;
                                      });
@@ -619,7 +622,7 @@ namespace hex::plugin::builtin {
                     nlohmann::json nodeJson = nlohmann::json::parse(file.readString());
 
                     // Add the loaded node to the list of custom nodes
-                    m_customNodes.push_back(CustomNode { Lang(nodeJson.at("name").get<std::string>()), nodeJson });
+                    m_customNodes.push_back(CustomNode { .name=Lang(nodeJson.at("name").get<std::string>()), .data=nodeJson });
                 } catch (nlohmann::json::exception &e) {
                     log::warn("Failed to load custom node '{}': {}", entry.path().string(), e.what());
                 }
@@ -685,7 +688,7 @@ namespace hex::plugin::builtin {
             }
 
             // Draw all nodes that are registered in the content registry
-            for (const auto &[unlocalizedCategory, unlocalizedName, function] : ContentRegistry::DataProcessorNode::impl::getEntries()) {
+            for (const auto &[unlocalizedCategory, unlocalizedName, function] : ContentRegistry::DataProcessor::impl::getEntries()) {
                 if (unlocalizedCategory.empty() && unlocalizedName.empty()) {
                     // Draw a separator if the node has no category and no name
                     ImGui::Separator();
@@ -707,13 +710,18 @@ namespace hex::plugin::builtin {
 
             // Draw custom nodes submenu
             if (ImGui::BeginMenu("hex.builtin.nodes.custom"_lang)) {
-                ImGui::Separator();
+                if (!m_customNodes.empty())
+                    ImGui::Separator();
 
                 // Draw entries for each custom node
-                for (auto &customNode : m_customNodes) {
+                u32 id = 1;
+                for (const auto &customNode : m_customNodes) {
+                    ImGui::PushID(id);
                     if (ImGui::MenuItem(customNode.name.c_str())) {
                         node = loadNode(customNode.data);
                     }
+                    ImGui::PopID();
+                    id += 1;
                 }
                 ImGui::EndMenu();
             }
@@ -755,7 +763,7 @@ namespace hex::plugin::builtin {
         if (ImGui::BeginPopup("Node Menu")) {
             if (ImGui::MenuItem("hex.builtin.view.data_processor.menu.save_node"_lang)) {
                 // Find the node that was right-clicked
-                auto it = std::find_if(workspace.nodes.begin(), workspace.nodes.end(),
+                auto it = std::ranges::find_if(workspace.nodes,
                                        [this](const auto &node) {
                                            return node->getId() == m_rightClickedId;
                                        });
@@ -849,7 +857,7 @@ namespace hex::plugin::builtin {
 
                             auto value = i64(*reinterpret_cast<i128*>(defaultValue.data()));
                             if (ImGui::InputScalar(Lang(attribute.getUnlocalizedName()), ImGuiDataType_S64, &value)) {
-                                std::fill(defaultValue.begin(), defaultValue.end(), 0x00);
+                                std::ranges::fill(defaultValue, 0x00);
 
                                 i128 writeValue = value;
                                 std::memcpy(defaultValue.data(), &writeValue, sizeof(writeValue));
@@ -859,7 +867,7 @@ namespace hex::plugin::builtin {
 
                             auto value = double(*reinterpret_cast<long double*>(defaultValue.data()));
                             if (ImGui::InputScalar(Lang(attribute.getUnlocalizedName()), ImGuiDataType_Double, &value)) {
-                                std::fill(defaultValue.begin(), defaultValue.end(), 0x00);
+                                std::ranges::fill(defaultValue, 0x00);
 
                                 long double writeValue = value;
                                 std::memcpy(defaultValue.data(), &writeValue, sizeof(writeValue));
@@ -888,6 +896,8 @@ namespace hex::plugin::builtin {
     }
 
     void ViewDataProcessor::drawContent() {
+        if (m_workspaceStack->empty()) return;
+
         auto &workspace = *m_workspaceStack->back();
 
         ImGui::BeginDisabled(m_evaluationTask.isRunning());
@@ -913,7 +923,7 @@ namespace hex::plugin::builtin {
         }
 
         // Draw the main node editor workspace window
-        if (ImGui::BeginChild("##node_editor", ImGui::GetContentRegionAvail() - ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 1.3F))) {
+        if (ImGui::BeginChild("##node_editor", ImGui::GetContentRegionAvail() - ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 1.25F))) {
             ImNodes::BeginNodeEditor();
 
             if (m_evaluationTask.isRunning())
@@ -981,6 +991,8 @@ namespace hex::plugin::builtin {
 
         ImGui::EndDisabled();
 
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ImGui::GetStyle().ItemSpacing.y);
+
         // Draw the control bar at the bottom
         {
             if (!m_evaluationTask.isRunning()) {
@@ -995,7 +1007,9 @@ namespace hex::plugin::builtin {
 
             ImGui::SameLine();
 
-            ImGui::Checkbox("Continuous evaluation", &m_continuousEvaluation);
+            ImGuiExt::DimmedIconToggle(ICON_VS_DEBUG_RERUN, &m_continuousEvaluation);
+            ImGui::SetItemTooltip("%s", "hex.builtin.view.data_processor.continuous_evaluation"_lang.get());
+
         }
 
 
@@ -1140,7 +1154,7 @@ namespace hex::plugin::builtin {
 
     std::unique_ptr<dp::Node> ViewDataProcessor::loadNode(nlohmann::json data) {
         try {
-            auto &nodeEntries = ContentRegistry::DataProcessorNode::impl::getEntries();
+            auto &nodeEntries = ContentRegistry::DataProcessor::impl::getEntries();
 
             std::unique_ptr<dp::Node> newNode;
             for (auto &entry : nodeEntries) {
@@ -1276,8 +1290,17 @@ namespace hex::plugin::builtin {
 
             m_updateNodePositions = true;
         } catch (nlohmann::json::exception &e) {
-            ui::ToastError::open(hex::format("Failed to load nodes: {}", e.what()));
+            ui::ToastError::open(fmt::format("Failed to load nodes: {}", e.what()));
         }
+    }
+
+    void ViewDataProcessor::drawHelpText() {
+        ImGuiExt::TextFormattedWrapped("This view lets you create and evaluate data processing pipelines using a node-based interface.\n\n");
+        ImGui::NewLine();
+        ImGuiExt::TextFormattedWrapped("Right click anywhere in the workspace to add nodes. Connect the nodes by dragging links between their input and output attributes. "
+                                      "Nodes that have no output attributes are considered end nodes and will produce the final output of the pipeline.\n\n"
+                                      "Click the green play button at the bottom to evaluate the current pipeline. If any errors occur during evaluation, "
+                                      "the affected node will be highlighted in red and an error message will be shown when hovering over it.");
     }
 
 }

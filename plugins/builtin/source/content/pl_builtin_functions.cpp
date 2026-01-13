@@ -1,13 +1,14 @@
-#include <hex/api/imhex_api.hpp>
-#include <hex/api/content_registry.hpp>
+#include <hex/api/imhex_api/hex_editor.hpp>
+#include <hex/api/imhex_api/provider.hpp>
+#include <hex/api/content_registry/pattern_language.hpp>
 
 #include <hex/providers/provider.hpp>
 #include <hex/helpers/http_requests.hpp>
+#include <hex/trace/stacktrace.hpp>
 
 #include <pl/core/token.hpp>
 #include <pl/core/evaluator.hpp>
 
-#include <content/helpers/demangle.hpp>
 #include <pl/patterns/pattern.hpp>
 
 namespace hex::plugin::builtin {
@@ -26,7 +27,7 @@ namespace hex::plugin::builtin {
 
                 auto selection = ImHexApi::HexEditor::getSelection();
 
-                return u128(u128(selection->getStartAddress()) << 64 | u128(selection->getSize()));
+                return (u128(selection->getStartAddress()) << 64 | u128(selection->getSize()));
             });
 
             /* add_virtual_file(path, pattern) */
@@ -75,7 +76,7 @@ namespace hex::plugin::builtin {
             ContentRegistry::PatternLanguage::addFunction(nsHexDec, "demangle", FunctionParameterCount::exactly(1), [](Evaluator *, auto params) -> std::optional<Token::Literal> {
                 const auto mangledString = params[0].toString(false);
 
-                return hex::plugin::builtin::demangle(mangledString);
+                return trace::demangle(mangledString);
             });
         }
 

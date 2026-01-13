@@ -1,6 +1,7 @@
 #include "content/views/view_settings.hpp"
 
-#include <hex/api/content_registry.hpp>
+#include <fonts/fonts.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
 #include <hex/api/events/requests_gui.hpp>
 #include <hex/helpers/logger.hpp>
 
@@ -11,7 +12,7 @@
 
 namespace hex::plugin::builtin {
 
-    ViewSettings::ViewSettings() : View::Modal("hex.builtin.view.settings.name") {
+    ViewSettings::ViewSettings() : View::Modal("hex.builtin.view.settings.name", ICON_VS_SETTINGS_GEAR) {
         // Handle window open requests
         RequestOpenWindow::subscribe(this, [this](const std::string &name) {
             if (name == "Settings") {
@@ -22,8 +23,8 @@ namespace hex::plugin::builtin {
         });
 
         // Add the settings menu item to the Extras menu
-        ContentRegistry::Interface::addMenuItemSeparator({ "hex.builtin.menu.extras" }, 3000);
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.extras", "hex.builtin.view.settings.name" }, ICON_VS_SETTINGS_GEAR, 4000, CTRLCMD + Keys::Comma, [&, this] {
+        ContentRegistry::UserInterface::addMenuItemSeparator({ "hex.builtin.menu.extras" }, 3000);
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.extras", "hex.builtin.view.settings.name" }, ICON_VS_SETTINGS_GEAR, 4000, CTRLCMD + Keys::Comma, [&, this] {
             this->getWindowOpenState() = true;
         });
 
@@ -31,11 +32,13 @@ namespace hex::plugin::builtin {
             for (const auto &[unlocalizedCategory, unlocalizedDescription, subCategories] : ContentRegistry::Settings::impl::getSettings()) {
                 for (const auto &[unlocalizedSubCategory, entries] : subCategories) {
                     for (const auto &[unlocalizedName, widget] : entries) {
+                        auto defaultValue = widget->store();
                         try {
-                            auto defaultValue = widget->store();
                             widget->load(ContentRegistry::Settings::impl::getSetting(unlocalizedCategory, unlocalizedName, defaultValue));
                         } catch (const std::exception &e) {
                             log::error("Failed to load setting [{} / {}]: {}", unlocalizedCategory.get(), unlocalizedName.get(), e.what());
+
+                            ContentRegistry::Settings::impl::getSetting(unlocalizedCategory, unlocalizedName, defaultValue) = defaultValue;
                         }
                     }
                 }
@@ -49,7 +52,7 @@ namespace hex::plugin::builtin {
     }
 
     void ViewSettings::drawContent() {
-        if (ImGui::BeginTable("Settings", 2, ImGuiTableFlags_BordersInner)) {
+        if (ImGui::BeginTable("Settings", 2, ImGuiTableFlags_BordersInner | ImGuiTableFlags_Resizable)) {
             ImGui::TableSetupColumn("##category", ImGuiTableColumnFlags_WidthFixed, 120_scaled);
             ImGui::TableSetupColumn("##settings", ImGuiTableColumnFlags_WidthStretch);
 
@@ -82,7 +85,7 @@ namespace hex::plugin::builtin {
             if (m_selectedCategory != nullptr) {
                 auto &category = *m_selectedCategory;
 
-                if (ImGui::BeginChild("scrolling")) {
+                if (ImGui::BeginChild("scrolling", ImVec2(0, 0), ImGuiChildFlags_Borders)) {
 
                     // Draw the category description
                     if (!category.unlocalizedDescription.empty()) {
@@ -108,8 +111,16 @@ namespace hex::plugin::builtin {
                                 ImGui::PopItemWidth();
                                 ImGui::EndDisabled();
 
-                                if (const auto &tooltip = setting.widget->getTooltip(); tooltip.has_value() && ImGui::IsItemHovered())
-                                    ImGuiExt::InfoTooltip(Lang(tooltip.value()));
+                                if (const auto &tooltip = setting.widget->getTooltip(); tooltip.has_value()) {
+                                    ImGui::BeginDisabled();
+                                    ImGui::Indent();
+                                    fonts::Default().push(0.8F);
+                                    ImGuiExt::TextFormattedWrapped(Lang(tooltip.value()));
+                                    ImGui::NewLine();
+                                    fonts::Default().pop();
+                                    ImGui::Unindent();
+                                    ImGui::EndDisabled();
+                                }
 
                                 auto &widget = setting.widget;
 
@@ -123,14 +134,13 @@ namespace hex::plugin::builtin {
                                     // Print a debug message
                                     log::debug("Setting [{} / {}]: Value was changed to {}", category.unlocalizedName.get(), setting.unlocalizedName.get(), nlohmann::to_string(newValue));
 
-                                    // Signal that the setting was changed
-                                    widget->onChanged();
-
                                     // Request a restart if the setting requires it
                                     if (widget->doesRequireRestart()) {
                                         m_restartRequested = true;
                                         m_triggerPopup = true;
                                     }
+
+                                    ContentRegistry::Settings::impl::store();
                                 }
                             }
 

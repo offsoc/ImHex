@@ -1,12 +1,9 @@
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/pattern_language.hpp>
 
 #include <imgui.h>
+#include <fonts/vscode_icons.hpp>
 
 #include <pl/patterns/pattern.hpp>
-
-#include <hex/helpers/fmt.hpp>
-
-#include <fonts/vscode_icons.hpp>
 
 namespace hex::plugin::visualizers {
 
@@ -41,7 +38,7 @@ namespace hex::plugin::visualizers {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
             ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5F));
 
-            if (ImGui::Button(hex::format(" {}  {}", ICON_VS_PLAY, pattern.getFormattedValue()).c_str(), ImVec2(ImGui::GetColumnWidth(), ImGui::GetTextLineHeight()))) {
+            if (ImGui::Button(fmt::format(" {}  {}", ICON_VS_PLAY, pattern.getFormattedValue()).c_str(), ImVec2(ImGui::GetColumnWidth(), ImGui::GetTextLineHeight()))) {
                 auto *evaluator = pattern.getEvaluator();
                 const auto functionName = arguments[0].toString(false);
                 const auto &function = evaluator->findFunction(functionName);

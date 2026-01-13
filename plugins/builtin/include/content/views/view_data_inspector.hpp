@@ -3,7 +3,8 @@
 #include <hex/ui/view.hpp>
 #include <ui/visualizer_drawer.hpp>
 
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/views.hpp>
+#include <hex/api/content_registry/data_inspector.hpp>
 #include <hex/api/task_manager.hpp>
 
 #include <bit>
@@ -17,6 +18,12 @@ namespace hex::plugin::builtin {
         ~ViewDataInspector() override;
 
         void drawContent() override;
+
+        View* getMenuItemInheritView() const override {
+            return ContentRegistry::Views::getViewByName("hex.builtin.view.hex_editor.name");
+        }
+
+        void drawHelpText() override;
 
     private:
         struct InspectorCacheEntry {
@@ -39,10 +46,13 @@ namespace hex::plugin::builtin {
 
         void inspectorReadFunction(u64 offset, u8 *buffer, size_t size);
 
+        void preprocessBytes(std::span<u8> data);
+
         // draw functions
         void drawEndianSetting();
         void drawRadixSetting();
         void drawInvertSetting();
+        void drawReverseSetting();
         void drawInspectorRows();
         void drawInspectorRow(InspectorCacheEntry& entry);
 
@@ -54,6 +64,7 @@ namespace hex::plugin::builtin {
         std::endian m_endian = std::endian::native;
         ContentRegistry::DataInspector::NumberDisplayStyle m_numberDisplayStyle = ContentRegistry::DataInspector::NumberDisplayStyle::Decimal;
         bool m_invert = false;
+        bool m_reverse = false;
 
         ui::VisualizerDrawer m_visualizerDrawer;
         u64 m_startAddress  = 0;

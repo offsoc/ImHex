@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <numbers>
+#include <array>
 
 #include <opengl_support.h>
 #include "imgui.h"
@@ -79,7 +80,7 @@ namespace hex::gl {
             return *this;
         }
 
-        auto operator-=(Vector other) {
+        auto operator-=(const Vector &other) {
             for (size_t i = 0; i < Size; i++)
                 m_data[i] -= other.m_data[i];
 
@@ -156,7 +157,7 @@ namespace hex::gl {
         }
 
     private:
-        std::array<T, Size> m_data;
+        std::array<T, Size> m_data = { };
     };
 
     template<typename T, size_t Rows, size_t Columns>
@@ -188,7 +189,7 @@ namespace hex::gl {
 
 
         T &getElement(int row,int col) {
-            return this->mat[row * Columns+col];
+            return this->mat[row * Columns + col];
         }
 
         Vector<T,Rows> getColumn(int col) {
@@ -205,12 +206,12 @@ namespace hex::gl {
             return result;
         }
 
-        void updateRow(int row, Vector<T,Columns> values) {
+        void updateRow(int row, const Vector<T, Columns> &values) {
             for (size_t i = 0; i < Columns; i++)
                 this->mat[row * Columns + i] = values[i];
         }
 
-        void updateColumn(int col, Vector<T,Rows> values) {
+        void updateColumn(int col, const Vector<T, Rows> &values) {
             for (size_t i = 0; i < Rows; i++)
                 this->mat[i * Columns + col] = values[i];
         }
@@ -811,6 +812,7 @@ namespace hex::gl {
 
         void setUniform(std::string_view name, const int &value);
         void setUniform(std::string_view name, const float &value);
+        bool hasUniform(std::string_view name);
 
         template<size_t N>
         void setUniform(std::string_view name, const Vector<float, N> &value) {
@@ -934,7 +936,7 @@ namespace hex::gl {
         void attachTexture(const Texture &texture) const;
 
     private:
-        GLuint m_frameBuffer, m_renderBuffer;
+        GLuint m_frameBuffer = 0, m_renderBuffer = 0;
     };
 
     class AxesVectors {

@@ -1,9 +1,11 @@
+#include <iostream>
 #include <content/command_line_interface.hpp>
-#include <content/providers/file_provider.hpp>
-#include <content/helpers/demangle.hpp>
+#include <hex/mcp/client.hpp>
 
-#include <hex/api/content_registry.hpp>
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/imhex_api/system.hpp>
+#include <hex/api/imhex_api/hex_editor.hpp>
+#include <hex/api/content_registry/settings.hpp>
+#include <hex/api/content_registry/views.hpp>
 #include <hex/api/events/requests_interaction.hpp>
 #include <hex/api/events/requests_gui.hpp>
 #include <hex/api/plugin_manager.hpp>
@@ -16,15 +18,20 @@
 #include <hex/helpers/utils.hpp>
 #include <hex/helpers/default_paths.hpp>
 #include <hex/helpers/debugging.hpp>
+#include <hex/helpers/http_requests.hpp>
 
 #include <hex/subcommands/subcommands.hpp>
+#include <hex/trace/stacktrace.hpp>
 
 #include <romfs/romfs.hpp>
 #include <wolv/utils/string.hpp>
 #include <wolv/math_eval/math_evaluator.hpp>
 
 #include <pl/cli/cli.hpp>
-#include <llvm/Demangle/Demangle.h>
+
+#include <content/providers/file_provider.hpp>
+#include <content/views/fullscreen/view_fullscreen_save_editor.hpp>
+#include <content/views/fullscreen/view_fullscreen_file_info.hpp>
 
 namespace hex::plugin::builtin {
     using namespace hex::literals;
@@ -32,7 +39,7 @@ namespace hex::plugin::builtin {
     void handleVersionCommand(const std::vector<std::string> &args) {
         std::ignore = args;
 
-        hex::log::print(std::string(romfs::get("logo.ans").string()),
+        hex::log::print(fmt::runtime(romfs::get("logo.ans").string()),
                    ImHexApi::System::getImHexVersion().get(),
                    ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash(),
                    __DATE__, __TIME__,
@@ -94,29 +101,22 @@ namespace hex::plugin::builtin {
         }
 
         std::vector<std::string> fullPaths;
-        bool doubleDashFound = false;
-        for (auto &arg : args) {
+        for (const auto &arg : args) {
+            try {
+                std::fs::path path;
 
-            // Skip the first argument named `--`
-            if (arg == "--" && !doubleDashFound) {
-                doubleDashFound = true;
-            } else {
                 try {
-                    std::fs::path path;
-
-                    try {
-                        path = std::fs::weakly_canonical(arg);
-                    } catch(std::fs::filesystem_error &) {
-                        path = arg;
-                    }
-
-                    if (path.empty())
-                        continue;
-
-                    fullPaths.push_back(wolv::util::toUTF8String(path));
-                } catch (std::exception &e) {
-                    log::error("Failed to open file '{}'\n    {}", arg, e.what());
+                    path = std::fs::absolute(arg);
+                } catch(std::fs::filesystem_error &) {
+                    path = arg;
                 }
+
+                if (path.empty())
+                    continue;
+
+                fullPaths.push_back(wolv::util::toUTF8String(path));
+            } catch (std::exception &e) {
+                log::error("Failed to open file '{}'\n    {}", arg, e.what());
             }
         }
 
@@ -159,7 +159,7 @@ namespace hex::plugin::builtin {
 
         wolv::math_eval::MathEvaluator<long double> evaluator;
 
-        auto input = hex::format("{}", fmt::join(args, " "));
+        auto input = fmt::format("{}", fmt::join(args, " "));
         auto result = evaluator.evaluate(input);
 
         if (!result.has_value())
@@ -345,14 +345,14 @@ namespace hex::plugin::builtin {
             processedArgs.emplace_back("--help");
         } else {
             for (const auto &path : paths::PatternsInclude.read())
-                processedArgs.emplace_back(hex::format("--includes={}", wolv::util::toUTF8String(path)));
+                processedArgs.emplace_back(fmt::format("--includes={}", wolv::util::toUTF8String(path)));
         }
 
         std::exit(pl::cli::executeCommandLineInterface(processedArgs));
     }
 
     void handleHexdumpCommand(const std::vector<std::string> &args) {
-        if (args.size() < 1 || args.size() > 3) {
+        if (args.empty() || args.size() > 3) {
             log::println("usage: imhex --hexdump <file> <offset> <size>");
             std::exit(EXIT_FAILURE);
         }
@@ -360,10 +360,10 @@ namespace hex::plugin::builtin {
         std::fs::path filePath = reinterpret_cast<const char8_t*>(args[0].data());
 
         FileProvider provider;
-
         provider.setPath(filePath);
-        if (!provider.open()) {
-            log::println("Failed to open file '{}'", args[0]);
+        auto result = provider.open();
+        if (result.isFailure()) {
+            log::println("Failed to open file '{}': {}", args[0], result.getErrorMessage());
             std::exit(EXIT_FAILURE);
         }
 
@@ -383,7 +383,7 @@ namespace hex::plugin::builtin {
             std::exit(EXIT_FAILURE);
         }
 
-        log::println("{}", hex::plugin::builtin::demangle(args[0]));
+        log::println("{}", trace::demangle(args[0]));
         std::exit(EXIT_SUCCESS);
     }
 
@@ -399,7 +399,7 @@ namespace hex::plugin::builtin {
         if (std::fgets(input.data(), input.size() - 1, stdin) == nullptr)
             std::exit(EXIT_FAILURE);
 
-        input = input.c_str();
+        input = input.c_str(); // Stop at first null byte
         input = wolv::util::trim(input);
 
         if (input == ConfirmationString) {
@@ -415,16 +415,135 @@ namespace hex::plugin::builtin {
     }
 
     void handleDebugModeCommand(const std::vector<std::string> &) {
-        hex::dbg::setDebugModeEnabled(true);
+        dbg::setDebugModeEnabled(true);
+    }
+
+    void handleValidatePluginCommand(const std::vector<std::string> &args) {
+        if (args.size() != 1) {
+            log::println("usage: imhex --validate-plugin <plugin path>");
+            std::exit(EXIT_FAILURE);
+        }
+
+        log::resumeLogging();
+
+        const auto plugin = Plugin(args[0]);
+
+        if (!plugin.isLoaded()) {
+            log::println("Plugin couldn't be loaded. Make sure the plugin was built using the SDK of this ImHex version!");
+            std::exit(EXIT_FAILURE);
+        }
+
+        if (!plugin.isValid()) {
+            log::println("Plugin is missing required init function! Make sure your plugin has a IMHEX_PLUGIN_SETUP or IMHEX_LIBRARY_SETUP block!");
+            std::exit(EXIT_FAILURE);
+        }
+
+        if (!plugin.initializePlugin()) {
+            log::println("An error occurred while trying to initialize the plugin. Check the logs for more information.");
+            std::exit(EXIT_FAILURE);
+        }
+
+        log::println("Plugin is valid!");
+
+        std::exit(EXIT_SUCCESS);
+    }
+
+    void handleSaveEditorCommand(const std::vector<std::string> &args) {
+        std::string type;
+        std::string argument;
+        if (args.size() == 1) {
+            type = "file";
+            argument = args[0];
+        } else if (args.size() == 2) {
+            type = args[0];
+            argument = args[1];
+        } else {
+            log::println("usage: imhex --save-editor [file|gist] <file path|gist id>");
+            std::exit(EXIT_FAILURE);
+        }
+
+        if (type == "file") {
+            if (!wolv::io::fs::exists(argument)) {
+                log::println("Save Editor file '{}' does not exist!", argument);
+                std::exit(EXIT_FAILURE);
+            }
+
+            wolv::io::File file(argument, wolv::io::File::Mode::Read);
+            if (!file.isValid()) {
+                log::println("Failed to open Save Editor file '{}'", argument);
+                std::exit(EXIT_FAILURE);
+            }
+
+            ContentRegistry::Views::setFullScreenView<ViewFullScreenSaveEditor>(file.readString());
+        } else if (type == "gist") {
+            std::thread([argument] {
+                HttpRequest request("GET", "https://api.github.com/gists/" + argument);
+                auto response = request.execute().get();
+
+                if (!response.isSuccess()) {
+                    switch (response.getStatusCode()) {
+                        case 404:
+                            log::println("Gist with ID '{}' not found!", argument);
+                            break;
+                        case 403:
+                            log::println("Gist with ID '{}' is private or you have exceeded the rate limit!", argument);
+                            break;
+                        default:
+                            log::println("Failed to fetch Gist with ID '{}': {}", argument, response.getStatusCode());
+                            break;
+                    }
+                    std::exit(EXIT_FAILURE);
+                }
+
+                try {
+                    const auto json = nlohmann::json::parse(response.getData());
+                    if (!json.contains("files") || json["files"].size() != 1) {
+                        log::println("Gist with ID '{}' does not have exactly one file!", argument);
+                        std::exit(EXIT_FAILURE);
+                    }
+
+                    auto sourceCode = (*json["files"].begin())["content"];
+                    TaskManager::doLater([sourceCode] {
+                        ContentRegistry::Views::setFullScreenView<ViewFullScreenSaveEditor>(sourceCode);
+                    });
+                } catch (const nlohmann::json::parse_error &e) {
+                    log::println("Failed to parse Gist response: {}", e.what());
+                    std::exit(EXIT_FAILURE);
+                }
+            }).detach();
+        } else {
+            log::println("Unknown source type '{}'. Use 'file' or 'gist'.", type);
+            std::exit(EXIT_FAILURE);
+        }
+    }
+
+    void handleFileInfoCommand(const std::vector<std::string> &args) {
+        if (args.size() != 1) {
+            log::println("usage: imhex --file-info <file>");
+            std::exit(EXIT_FAILURE);
+        }
+
+        const auto path = std::fs::path(args[0]);
+        if (!wolv::io::fs::exists(path)) {
+            log::println("File '{}' does not exist!", args[0]);
+            std::exit(EXIT_FAILURE);
+        }
+
+        ContentRegistry::Views::setFullScreenView<ViewFullScreenFileInfo>(path);
+    }
+
+    void handleMCPCommand(const std::vector<std::string> &) {
+        mcp::Client client;
+
+        auto result = client.run(std::cin, std::cout);
+        fmt::print(stderr, "MCP Client disconnected!\n");
+        std::exit(result);
     }
 
 
     void registerCommandForwarders() {
         hex::subcommands::registerSubCommand("open", [](const std::vector<std::string> &args){
             for (auto &arg : args) {
-                if (arg.starts_with("--"))
-                    break;
-
                 RequestOpenFile::post(arg);
             }
         });
@@ -463,7 +582,7 @@ namespace hex::plugin::builtin {
             }
 
             RequestSetPatternLanguageCode::post(patternSourceCode);
-            RequestRunPatternCode::post();
+            RequestTriggerPatternEvaluation::post();
         });
     }
 

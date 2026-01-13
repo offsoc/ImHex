@@ -1,5 +1,13 @@
+#include <hex/api/achievement_manager.hpp>
 #include <hex/api/events/requests_interaction.hpp>
 #include <hex/api/task_manager.hpp>
+#include <hex/api/imhex_api/system.hpp>
+#include <hex/api/content_registry/settings.hpp>
+#include <hex/api/tutorial_manager.hpp>
+#include <hex/api/shortcut_manager.hpp>
+
+#include <hex/api/events/events_lifecycle.hpp>
+
 #include <hex/helpers/utils.hpp>
 
 #include <init/splash_window.hpp>
@@ -30,9 +38,24 @@ namespace hex::init {
         for (const auto &[name, task, async, running] : init::getInitTasks())
             splashWindow->addStartupTask(name, task, async);
 
-        splashWindow->startStartupTasks();
+        splashWindow->startStartupTaskExecution();
 
         return splashWindow;
+    }
+
+    void initializationFinished() {
+        ContentRegistry::Settings::impl::load();
+        ContentRegistry::Settings::impl::store();
+
+        AchievementManager::loadProgress();
+
+        EventImHexStartupFinished::post();
+
+        TutorialManager::init();
+
+        #if defined(OS_MACOS)
+            ShortcutManager::enableMacOSMode();
+        #endif
     }
 
 
@@ -40,6 +63,8 @@ namespace hex::init {
      * @brief Deinitializes ImHex by running all exit tasks
      */
     void deinitializeImHex() {
+        ContentRegistry::Settings::impl::store();
+
         // Run exit tasks
         init::runExitTasks();
 

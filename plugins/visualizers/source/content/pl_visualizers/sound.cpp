@@ -1,14 +1,15 @@
-#include <hex/helpers/utils.hpp>
-
 #include <content/visualizer_helpers.hpp>
 
 #include <implot.h>
 #include <imgui.h>
 #include <miniaudio.h>
 #include <fonts/vscode_icons.hpp>
+
 #include <hex/api/task_manager.hpp>
 
 #include <hex/ui/imgui_imhex_extensions.h>
+#include <hex/helpers/scaling.hpp>
+#include <hex/helpers/utils.hpp>
 
 namespace hex::plugin::visualizers {
 
@@ -28,9 +29,11 @@ namespace hex::plugin::visualizers {
         static TaskHolder resetTask;
 
         if (sampleRate == 0)
-            throw std::logic_error(hex::format("Invalid sample rate: {}", sampleRate));
-        else if (channels == 0)
-            throw std::logic_error(hex::format("Invalid channel count: {}", channels));
+            throw std::logic_error(fmt::format("Invalid sample rate: {}", sampleRate));
+        if (channels == 0)
+            throw std::logic_error(fmt::format("Invalid channel count: {}", channels));
+        if (downSampling == 0)
+            throw std::logic_error(fmt::format("Invalid down sampling factor: {} / 2400 / {} = {}", wavePattern->getSize(), channels, downSampling));
         u64 sampledIndex;
         if (shouldReset) {
             waveData.clear();

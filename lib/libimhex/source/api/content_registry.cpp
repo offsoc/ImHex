@@ -1,4 +1,24 @@
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/background_services.hpp>
+#include <hex/api/content_registry/command_palette.hpp>
+#include <hex/api/content_registry/communication_interface.hpp>
+#include <hex/api/content_registry/data_formatter.hpp>
+#include <hex/api/content_registry/data_information.hpp>
+#include <hex/api/content_registry/data_inspector.hpp>
+#include <hex/api/content_registry/data_processor.hpp>
+#include <hex/api/content_registry/diffing.hpp>
+#include <hex/api/content_registry/disassemblers.hpp>
+#include <hex/api/content_registry/experiments.hpp>
+#include <hex/api/content_registry/file_type_handler.hpp>
+#include <hex/api/content_registry/hashes.hpp>
+#include <hex/api/content_registry/hex_editor.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
+#include <hex/api/content_registry/pattern_language.hpp>
+#include <hex/api/content_registry/provider.hpp>
+#include <hex/api/content_registry/reports.hpp>
+#include <hex/api/content_registry/settings.hpp>
+#include <hex/api/content_registry/tools.hpp>
+#include <hex/api/content_registry/views.hpp>
+
 #include <hex/api/shortcut_manager.hpp>
 #include <hex/api/events/requests_provider.hpp>
 
@@ -6,13 +26,17 @@
 #include <hex/helpers/logger.hpp>
 #include <hex/helpers/auto_reset.hpp>
 #include <hex/helpers/default_paths.hpp>
+#include <hex/helpers/utils.hpp>
 
 #include <hex/ui/view.hpp>
 #include <hex/data_processor/node.hpp>
 
+#include <hex/providers/provider.hpp>
+
 #include <algorithm>
 #include <filesystem>
 #include <jthread.hpp>
+#include <hex/api/events/requests_interaction.hpp>
 
 #if defined(OS_WEB)
 #include <emscripten.h>
@@ -37,7 +61,13 @@ namespace hex {
                 OnChangeCallback callback;
             };
 
+            struct OnSave {
+                u64 id;
+                OnSaveCallback callback;
+            };
+
             static AutoReset<std::map<std::string, std::map<std::string, std::vector<OnChange>>>> s_onChangeCallbacks;
+            static AutoReset<std::vector<OnSave>> s_onSaveCallbacks;
 
             static void runAllOnChangeCallbacks() {
                 for (const auto &[category, rest] : *impl::s_onChangeCallbacks) {
@@ -46,7 +76,7 @@ namespace hex {
                             try {
                                 callback(getSetting(category, name, {}));
                             } catch (const std::exception &e) {
-                                log::error("Failed to load setting [{}/{}]: {}", category, name, e.what());
+                                log::error("Failed to load setting [{} / {}]: {}", category, name, e.what());
                             }
                         }
                     }
@@ -152,6 +182,20 @@ namespace hex {
                 }
 
                 void store() {
+                    thread_local bool isRunningCallbacks = false;
+
+                    if (isRunningCallbacks)
+                        return;
+                    isRunningCallbacks = true;
+                    for (const auto &[id, callback] : *s_onSaveCallbacks) {
+                        try {
+                            callback();
+                        } catch (const std::exception &e) {
+                            log::error("Failed to run onSave handler for setting: {}", e.what());
+                        }
+                    }
+                    isRunningCallbacks = false;
+
                     if (!s_settings.isValid())
                         return;
 
@@ -216,12 +260,13 @@ namespace hex {
                 entry->widget = std::move(widget);
                 if (entry->widget != nullptr) {
                     onChange(unlocalizedCategory, unlocalizedName, [widget = entry->widget.get(), unlocalizedCategory, unlocalizedName](const SettingsValue &) {
+                        auto defaultValue = widget->store();
                         try {
-                            auto defaultValue = widget->store();
                             widget->load(ContentRegistry::Settings::impl::getSetting(unlocalizedCategory, unlocalizedName, defaultValue));
                             widget->onChanged();
                         } catch (const std::exception &e) {
                             log::error("Failed to load setting [{} / {}]: {}", unlocalizedCategory.get(), unlocalizedName.get(), e.what());
+                            ContentRegistry::Settings::impl::getSetting(unlocalizedCategory, unlocalizedName, defaultValue) = defaultValue;
                         }
                     });
 
@@ -278,6 +323,16 @@ namespace hex {
                 if (categoryIt->second.empty())
                     impl::s_onChangeCallbacks->erase(categoryIt);
             }
+        }
+
+        u64 onSave(const OnSaveCallback &callback) {
+            static u64 id = 1;
+            impl::s_onSaveCallbacks->emplace_back(id, callback);
+
+            auto result = id;
+            id += 1;
+
+            return result;
         }
 
         namespace Widgets {
@@ -362,16 +417,25 @@ namespace hex {
                 m_flags = flags;
             }
 
+            static bool areColorsEquals(const std::array<float, 4> &a, const std::array<float, 4> &b) {
+                return std::abs(a[0] - b[0]) < 0.005f &&
+                       std::abs(a[1] - b[1]) < 0.005f &&
+                       std::abs(a[2] - b[2]) < 0.005f &&
+                       std::abs(a[3] - b[3]) < 0.005f;
+            }
+
             bool ColorPicker::draw(const std::string &name) {
                 ImGui::PushID(name.c_str());
                 auto result = ImGui::ColorEdit4("##color_picker", m_value.data(), ImGuiColorEditFlags_NoInputs | m_flags);
 
                 ImGui::SameLine();
 
-                if (ImGui::Button("X", ImGui::GetStyle().FramePadding * 2 + ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()))) {
+                ImGui::BeginDisabled(areColorsEquals(m_value, m_defaultValue));
+                if (ImGuiExt::DimmedButton("\xee\xab\xa2", ImGui::GetStyle().FramePadding * 2 + ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()))) {
                     m_value = m_defaultValue;
                     result = true;
                 }
+                ImGui::EndDisabled();
 
                 ImGui::SameLine();
 
@@ -530,13 +594,19 @@ namespace hex {
                 return false;
             }
 
+            bool Spacer::draw(const std::string& name) {
+                std::ignore = name;
+                ImGui::NewLine();
+
+                return false;
+            }
 
         }
 
     }
 
 
-    namespace ContentRegistry::CommandPaletteCommands {
+    namespace ContentRegistry::CommandPalette {
 
         namespace impl {
 
@@ -550,18 +620,32 @@ namespace hex {
                 return *s_handlers;
             }
 
+            static AutoReset<std::optional<ContentDisplay>> s_displayedContent;
+            std::optional<ContentDisplay>& getDisplayedContent() {
+                return *s_displayedContent;
+            }
+
         }
 
         void add(Type type, const std::string &command, const UnlocalizedString &unlocalizedDescription, const impl::DisplayCallback &displayCallback, const impl::ExecuteCallback &executeCallback) {
             log::debug("Registered new command palette command: {}", command);
 
-            impl::s_entries->push_back(impl::Entry { type, command, unlocalizedDescription, displayCallback, executeCallback });
+            impl::s_entries->push_back(impl::Entry { .type=type, .command=command, .unlocalizedDescription=unlocalizedDescription, .displayCallback=displayCallback, .executeCallback=executeCallback });
         }
 
         void addHandler(Type type, const std::string &command, const impl::QueryCallback &queryCallback, const impl::DisplayCallback &displayCallback) {
             log::debug("Registered new command palette command handler: {}", command);
 
-            impl::s_handlers->push_back(impl::Handler { type, command, queryCallback, displayCallback });
+            impl::s_handlers->push_back(impl::Handler { .type=type, .command=command, .queryCallback=queryCallback, .displayCallback=displayCallback });
+        }
+
+        void setDisplayedContent(const impl::ContentDisplayCallback &displayCallback) {
+            impl::s_displayedContent = impl::ContentDisplay { .showSearchBox=true, .callback=displayCallback };
+        }
+
+        void openWithContent(const impl::ContentDisplayCallback &displayCallback) {
+            RequestOpenCommandPalette::post();
+            impl::s_displayedContent = impl::ContentDisplay { .showSearchBox=false, .callback=displayCallback };
         }
 
     }
@@ -699,12 +783,12 @@ namespace hex {
 
         void addVisualizer(const std::string &name, const impl::VisualizerFunctionCallback &function, pl::api::FunctionParameterCount parameterCount) {
             log::debug("Registered new pattern visualizer function: {}", name);
-            (*impl::s_visualizers)[name] = impl::Visualizer { parameterCount, function };
+            (*impl::s_visualizers)[name] = impl::Visualizer { .parameterCount=parameterCount, .callback=function };
         }
 
         void addInlineVisualizer(const std::string &name, const impl::VisualizerFunctionCallback &function, pl::api::FunctionParameterCount parameterCount) {
             log::debug("Registered new inline pattern visualizer function: {}", name);
-            (*impl::s_inlineVisualizers)[name] = impl::Visualizer { parameterCount, function };
+            (*impl::s_inlineVisualizers)[name] = impl::Visualizer { .parameterCount=parameterCount, .callback=function };
         }
 
     }
@@ -720,10 +804,19 @@ namespace hex {
             }
 
             void add(std::unique_ptr<View> &&view) {
-            log::debug("Registered new view: {}", view->getUnlocalizedName().get());
+                log::debug("Registered new view: {}", view->getUnlocalizedName().get());
 
-            s_views->emplace(view->getUnlocalizedName(), std::move(view));
-        }
+                s_views->emplace(view->getUnlocalizedName(), std::move(view));
+            }
+
+            static AutoReset<std::unique_ptr<View>> s_fullscreenView;
+            const std::unique_ptr<View>& getFullScreenView() {
+                return *s_fullscreenView;
+            }
+
+            void setFullScreenView(std::unique_ptr<View> &&view) {
+                s_fullscreenView = std::move(view);
+            }
 
         }
 
@@ -758,10 +851,10 @@ namespace hex {
 
         }
 
-        void add(const UnlocalizedString &unlocalizedName, const impl::Callback &function) {
+        void add(const UnlocalizedString &unlocalizedName, const char *icon, const impl::Callback &function) {
             log::debug("Registered new tool: {}", unlocalizedName.get());
 
-            impl::s_tools->emplace_back(impl::Entry { unlocalizedName, function });
+            impl::s_tools->emplace_back(impl::Entry { .unlocalizedName=unlocalizedName, .icon=icon, .function=function });
         }
 
     }
@@ -775,6 +868,18 @@ namespace hex {
                 return *s_entries;
             }
 
+        }
+
+        namespace EditWidget {
+            std::optional<std::vector<u8>> TextInput::draw(std::string &value, std::endian endian) {
+                if (ImGui::InputText("##InspectorLineEditing", value,
+                                 ImGuiInputTextFlags_EnterReturnsTrue |
+                                 ImGuiInputTextFlags_AutoSelectAll)) {
+                    return getBytes(value, endian);
+                }
+
+                return std::nullopt;
+            }
         }
 
         void add(const UnlocalizedString &unlocalizedName, size_t requiredSize, impl::GeneratorFunction displayGeneratorFunction, std::optional<impl::EditingFunction> editingFunction) {
@@ -799,7 +904,7 @@ namespace hex {
 
     }
 
-    namespace ContentRegistry::DataProcessorNode {
+    namespace ContentRegistry::DataProcessor {
 
         namespace impl {
 
@@ -822,66 +927,7 @@ namespace hex {
 
     }
 
-    namespace ContentRegistry::Language {
-
-        namespace impl {
-
-            static AutoReset<std::map<std::string, std::string>> s_languages;
-            const std::map<std::string, std::string>& getLanguages() {
-                return *s_languages;
-            }
-
-            static AutoReset<std::map<std::string, std::vector<LocalizationManager::LanguageDefinition>>> s_definitions;
-            const std::map<std::string, std::vector<LocalizationManager::LanguageDefinition>>& getLanguageDefinitions() {
-                return *s_definitions;
-            }
-
-        }
-
-        void addLocalization(const nlohmann::json &data) {
-            if (!data.is_object())
-                return;
-
-            if (!data.contains("code") || !data.contains("country") || !data.contains("language") || !data.contains("translations")) {
-                log::error("Localization data is missing required fields!");
-                return;
-            }
-
-            const auto &code            = data["code"];
-            const auto &country         = data["country"];
-            const auto &language        = data["language"];
-            const auto &translations    = data["translations"];
-
-            if (!code.is_string() || !country.is_string() || !language.is_string() || !translations.is_object()) {
-                log::error("Localization data has invalid fields!");
-                return;
-            }
-
-            if (data.contains("fallback")) {
-                const auto &fallback = data["fallback"];
-
-                if (fallback.is_boolean() && fallback.get<bool>())
-                    LocalizationManager::impl::setFallbackLanguage(code.get<std::string>());
-            }
-
-            impl::s_languages->insert({ code.get<std::string>(), hex::format("{} ({})", language.get<std::string>(), country.get<std::string>()) });
-
-            std::map<std::string, std::string> translationDefinitions;
-            for (auto &[key, value] : translations.items()) {
-                if (!value.is_string()) {
-                    log::error("Localization data has invalid fields!");
-                    continue;
-                }
-
-                translationDefinitions[key] = value.get<std::string>();
-            }
-
-            (*impl::s_definitions)[code.get<std::string>()].emplace_back(std::move(translationDefinitions));
-        }
-
-    }
-
-    namespace ContentRegistry::Interface {
+    namespace ContentRegistry::UserInterface {
 
         namespace impl {
 
@@ -930,6 +976,11 @@ namespace hex {
                 return *s_titlebarButtons;
             }
 
+            static AutoReset<std::vector<WelcomeScreenQuickSettingsToggle>> s_welcomeScreenQuickSettingsToggles;
+            const std::vector<WelcomeScreenQuickSettingsToggle>& getWelcomeScreenQuickSettingsToggles() {
+                return *s_welcomeScreenQuickSettingsToggles;
+            }
+
         }
 
         void registerMainMenuItem(const UnlocalizedString &unlocalizedName, u32 priority) {
@@ -950,7 +1001,7 @@ namespace hex {
             addMenuItem(unlocalizedMainMenuNames, "", priority, shortcut, function, enabledCallback, []{ return false; }, view);
         }
 
-        void addMenuItem(const std::vector<UnlocalizedString> &unlocalizedMainMenuNames, const Icon &icon, u32 priority, const Shortcut &shortcut, const impl::MenuCallback &function, const impl::EnabledCallback& enabledCallback, const impl::SelectedCallback &selectedCallback, View *view) {
+        void addMenuItem(const std::vector<UnlocalizedString> &unlocalizedMainMenuNames, const Icon &icon, u32 priority, Shortcut shortcut, const impl::MenuCallback &function, const impl::EnabledCallback& enabledCallback, const impl::SelectedCallback &selectedCallback, View *view) {
             log::debug("Added new menu item to menu {} with priority {}", unlocalizedMainMenuNames[0].get(), priority);
 
             Icon coloredIcon = icon;
@@ -958,10 +1009,14 @@ namespace hex {
                 coloredIcon.color = ImGuiCustomCol_ToolbarGray;
 
             impl::s_menuItems->insert({
-                priority, impl::MenuItem { unlocalizedMainMenuNames, coloredIcon, shortcut, view, function, enabledCallback, selectedCallback, -1 }
+                priority, impl::MenuItem { .unlocalizedNames=unlocalizedMainMenuNames, .icon=coloredIcon, .shortcut=shortcut, .view=view, .callback=function, .enabledCallback=enabledCallback, .selectedCallback=selectedCallback, .toolbarIndex=-1 }
             });
 
             if (shortcut != Shortcut::None) {
+                if (view != nullptr && !shortcut.isLocal()) {
+                    shortcut += CurrentView;
+                }
+
                 if (shortcut.isLocal() && view != nullptr)
                     ShortcutManager::addShortcut(view, shortcut, unlocalizedMainMenuNames, function, enabledCallback);
                 else
@@ -969,23 +1024,32 @@ namespace hex {
             }
         }
 
-        void addMenuItemSubMenu(std::vector<UnlocalizedString> unlocalizedMainMenuNames, u32 priority, const impl::MenuCallback &function, const impl::EnabledCallback& enabledCallback) {
-            addMenuItemSubMenu(std::move(unlocalizedMainMenuNames), "", priority, function, enabledCallback);
+        void addMenuItemSubMenu(std::vector<UnlocalizedString> unlocalizedMainMenuNames, u32 priority, const impl::MenuCallback &function, const impl::EnabledCallback& enabledCallback, View *view, bool showOnWelcomeScreen) {
+            addMenuItemSubMenu(std::move(unlocalizedMainMenuNames), "", priority, function, enabledCallback, view, showOnWelcomeScreen);
         }
 
-        void addMenuItemSubMenu(std::vector<UnlocalizedString> unlocalizedMainMenuNames, const char *icon, u32 priority, const impl::MenuCallback &function, const impl::EnabledCallback& enabledCallback) {
+        void addMenuItemSubMenu(std::vector<UnlocalizedString> unlocalizedMainMenuNames, const char *icon, u32 priority, const impl::MenuCallback &function, const impl::EnabledCallback& enabledCallback, View *view, bool showOnWelcomeScreen) {
             log::debug("Added new menu item sub menu to menu {} with priority {}", unlocalizedMainMenuNames[0].get(), priority);
 
             unlocalizedMainMenuNames.emplace_back(impl::SubMenuValue);
             impl::s_menuItems->insert({
-                priority, impl::MenuItem { unlocalizedMainMenuNames, icon, Shortcut::None, nullptr, function, enabledCallback, []{ return false; }, -1 }
+                priority, impl::MenuItem { .unlocalizedNames=unlocalizedMainMenuNames, .icon=icon, .shortcut=showOnWelcomeScreen ? Shortcut({ ShowOnWelcomeScreen }) : Shortcut::None, .view=view, .callback=function, .enabledCallback=enabledCallback, .selectedCallback=[]{ return false; }, .toolbarIndex=-1 }
             });
         }
 
-        void addMenuItemSeparator(std::vector<UnlocalizedString> unlocalizedMainMenuNames, u32 priority) {
+        void addMenuItemSeparator(std::vector<UnlocalizedString> unlocalizedMainMenuNames, u32 priority, View *view) {
             unlocalizedMainMenuNames.emplace_back(impl::SeparatorValue);
             impl::s_menuItems->insert({
-                priority, impl::MenuItem { unlocalizedMainMenuNames, "", Shortcut::None, nullptr, []{}, []{ return true; }, []{ return false; }, -1 }
+                priority, impl::MenuItem { .unlocalizedNames=unlocalizedMainMenuNames, .icon="", .shortcut=Shortcut::None, .view=view, .callback=[]{}, .enabledCallback=[]{ return true; }, .selectedCallback=[]{ return false; }, .toolbarIndex=-1 }
+            });
+        }
+
+        void addTaskBarMenuItem(std::vector<UnlocalizedString> unlocalizedMainMenuNames, u32 priority, const impl::MenuCallback &function, const impl::EnabledCallback& enabledCallback) {
+            log::debug("Added new taskbar menu item to menu {} ", unlocalizedMainMenuNames[0].get());
+
+            unlocalizedMainMenuNames.insert(unlocalizedMainMenuNames.begin(), impl::TaskBarMenuValue);
+            impl::s_menuItems->insert({
+                priority, impl::MenuItem { .unlocalizedNames=unlocalizedMainMenuNames, .icon="", .shortcut=Shortcut::None, .view=nullptr, .callback=function, .enabledCallback=enabledCallback, .selectedCallback=[]{ return false; }, .toolbarIndex=-1 }
             });
         }
 
@@ -1001,13 +1065,13 @@ namespace hex {
             impl::s_toolbarItems->push_back(function);
         }
 
-        void addMenuItemToToolbar(const UnlocalizedString& unlocalizedName, ImGuiCustomCol color) {
+        void addMenuItemToToolbar(const std::vector<UnlocalizedString>& unlocalizedNames, ImGuiCustomCol color) {
             const auto maxIndex = std::ranges::max_element(impl::getMenuItems(), [](const auto &a, const auto &b) {
                 return a.second.toolbarIndex < b.second.toolbarIndex;
             })->second.toolbarIndex;
 
             for (auto &[priority, menuItem] : *impl::s_menuItems) {
-                if (menuItem.unlocalizedNames.back() == unlocalizedName) {
+                if (menuItem.unlocalizedNames == unlocalizedNames) {
                     menuItem.toolbarIndex = maxIndex + 1;
                     menuItem.icon.color = color;
                     updateToolbarItems();
@@ -1024,7 +1088,7 @@ namespace hex {
         };
 
         void updateToolbarItems() {
-            std::set<ContentRegistry::Interface::impl::MenuItem*, MenuItemSorter> menuItems;
+            std::set<impl::MenuItem*, MenuItemSorter> menuItems;
 
             for (auto &[priority, menuItem] : impl::getMenuItemsMutable()) {
                 if (menuItem.toolbarIndex != -1) {
@@ -1044,44 +1108,53 @@ namespace hex {
             impl::s_sidebarItems->push_back({ icon, function, enabledCallback });
         }
 
-        void addTitleBarButton(const std::string &icon, const UnlocalizedString &unlocalizedTooltip, const impl::ClickCallback &function) {
-            impl::s_titlebarButtons->push_back({ icon, unlocalizedTooltip, function });
+        void addTitleBarButton(const std::string &icon, ImGuiCustomCol color, const UnlocalizedString &unlocalizedTooltip, const impl::ClickCallback &function) {
+            impl::s_titlebarButtons->push_back({ icon, color, unlocalizedTooltip, function });
+        }
+
+        void addWelcomeScreenQuickSettingsToggle(const std::string &icon, const UnlocalizedString &unlocalizedTooltip, bool defaultState, const impl::ToggleCallback &function) {
+            impl::s_welcomeScreenQuickSettingsToggles->push_back({ icon, icon, unlocalizedTooltip, function, defaultState });
+        }
+
+        void addWelcomeScreenQuickSettingsToggle(const std::string &onIcon, const std::string &offIcon, const UnlocalizedString &unlocalizedTooltip, bool defaultState, const impl::ToggleCallback &function) {
+            impl::s_welcomeScreenQuickSettingsToggles->push_back({ onIcon, offIcon, unlocalizedTooltip, function, defaultState });
+
         }
 
     }
 
-    namespace ContentRegistry::Provider {
+    
 
-        namespace impl {
+        namespace ContentRegistry::Provider::impl {
 
             void add(const std::string &typeName, ProviderCreationFunction creationFunction) {
-                (void)RequestCreateProvider::subscribe([expectedName = typeName, creationFunction](const std::string &name, bool skipLoadInterface, bool selectProvider, prv::Provider **provider) {
+                (void)RequestCreateProvider::subscribe([expectedName = typeName, creationFunction](const std::string &name, bool skipLoadInterface, bool selectProvider, std::shared_ptr<prv::Provider> *provider) {
                     if (name != expectedName) return;
 
                     auto newProvider = creationFunction();
 
                     if (provider != nullptr) {
-                        *provider = newProvider.get();
+                        *provider = newProvider;
                         ImHexApi::Provider::add(std::move(newProvider), skipLoadInterface, selectProvider);
                     }
                 });
             }
 
-            static AutoReset<std::vector<std::string>> s_providerNames;
-            const std::vector<std::string>& getEntries() {
+            static AutoReset<std::vector<Entry>> s_providerNames;
+            const std::vector<Entry>& getEntries() {
                 return *s_providerNames;
             }
 
-            void addProviderName(const UnlocalizedString &unlocalizedName) {
+            void addProviderName(const UnlocalizedString &unlocalizedName, const char *icon) {
                 log::debug("Registered new provider: {}", unlocalizedName.get());
 
-                s_providerNames->push_back(unlocalizedName);
+                s_providerNames->emplace_back(unlocalizedName, icon);
             }
 
         }
 
 
-    }
+    
 
     namespace ContentRegistry::DataFormatter {
 
@@ -1105,7 +1178,7 @@ namespace hex {
             impl::s_exportMenuEntries->push_back({ unlocalizedName, callback });
         }
 
-        void addFindExportFormatter(const UnlocalizedString &unlocalizedName, const std::string fileExtension, const impl::FindExporterCallback &callback) {
+        void addFindExportFormatter(const UnlocalizedString &unlocalizedName, const std::string &fileExtension, const impl::FindExporterCallback &callback) {
             log::debug("Registered new export formatter: {}", unlocalizedName.get());
 
             impl::s_findExportEntries->push_back({ unlocalizedName, fileExtension, callback });
@@ -1113,7 +1186,7 @@ namespace hex {
 
     }
 
-    namespace ContentRegistry::FileHandler {
+    namespace ContentRegistry::FileTypeHandler {
 
         namespace impl {
 
@@ -1179,10 +1252,10 @@ namespace hex {
             };
 
             UserData userData = {
-                    .data = &data,
-                    .maxChars = this->getMaxCharsPerCell(),
+                .data = &data,
+                .maxChars = this->getMaxCharsPerCell(),
 
-                    .editingDone = false
+                .editingDone = false
             };
 
             ImGui::PushID(reinterpret_cast<void*>(address));
@@ -1193,6 +1266,8 @@ namespace hex {
 
                 if (data->BufTextLen >= userData.maxChars)
                     userData.editingDone = true;
+
+                data->Buf[userData.maxChars] = 0x00;
 
                 return 0;
             }, &userData);
@@ -1235,39 +1310,34 @@ namespace hex {
 
     }
 
-    namespace ContentRegistry::Diffing {
 
-        namespace impl {
+    namespace ContentRegistry::Diffing::impl {
 
-            static AutoReset<std::vector<std::unique_ptr<Algorithm>>> s_algorithms;
-            const std::vector<std::unique_ptr<Algorithm>>& getAlgorithms() {
-                return *s_algorithms;
-            }
+        static AutoReset<std::vector<std::unique_ptr<Algorithm>>> s_algorithms;
+        const std::vector<std::unique_ptr<Algorithm>>& getAlgorithms() {
+            return *s_algorithms;
+        }
 
-            void addAlgorithm(std::unique_ptr<Algorithm> &&hash) {
-                s_algorithms->emplace_back(std::move(hash));
-            }
-
+        void addAlgorithm(std::unique_ptr<Algorithm> &&hash) {
+            s_algorithms->emplace_back(std::move(hash));
         }
 
     }
 
-    namespace ContentRegistry::Hashes {
 
-        namespace impl {
+    namespace ContentRegistry::Hashes::impl {
 
-            static AutoReset<std::vector<std::unique_ptr<Hash>>> s_hashes;
-            const std::vector<std::unique_ptr<Hash>>& getHashes() {
-                return *s_hashes;
-            }
+        static AutoReset<std::vector<std::unique_ptr<Hash>>> s_hashes;
+        const std::vector<std::unique_ptr<Hash>>& getHashes() {
+            return *s_hashes;
+        }
 
-            void add(std::unique_ptr<Hash> &&hash) {
-                s_hashes->emplace_back(std::move(hash));
-            }
-
+        void add(std::unique_ptr<Hash> &&hash) {
+            s_hashes->emplace_back(std::move(hash));
         }
 
     }
+
 
     namespace ContentRegistry::BackgroundServices {
 
@@ -1275,7 +1345,7 @@ namespace hex {
 
             class Service {
             public:
-                Service(const UnlocalizedString &unlocalizedName, std::jthread thread) : m_unlocalizedName(std::move(unlocalizedName)), m_thread(std::move(thread)) { }
+                Service(UnlocalizedString unlocalizedName, std::jthread thread) : m_unlocalizedName(std::move(unlocalizedName)), m_thread(std::move(thread)) { }
                 Service(const Service&) = delete;
                 Service(Service &&) = default;
                 ~Service() {
@@ -1343,6 +1413,40 @@ namespace hex {
             log::debug("Registered new network endpoint: {}", endpoint);
 
             impl::s_endpoints->insert({ endpoint, callback });
+        }
+
+    }
+
+    namespace ContentRegistry::MCP {
+
+        namespace impl {
+
+            std::unique_ptr<mcp::Server>& getMcpServerInstance() {
+                static std::unique_ptr<mcp::Server> server;
+
+                if (server == nullptr)
+                    server = std::make_unique<mcp::Server>();
+
+                return server;
+            }
+
+            static bool s_mcpEnabled = false;
+            void setEnabled(bool enabled) {
+                s_mcpEnabled = enabled;
+            }
+
+        }
+
+        bool isEnabled() {
+            return impl::s_mcpEnabled;
+        }
+
+        bool isConnected() {
+            return impl::getMcpServerInstance()->isConnected();
+        }
+
+        void registerTool(std::string_view capabilities, std::function<nlohmann::json(const nlohmann::json &params)> function) {
+            impl::getMcpServerInstance()->addPrimitive("tools", capabilities, function);
         }
 
     }
@@ -1416,6 +1520,16 @@ namespace hex {
 
     namespace ContentRegistry::DataInformation {
 
+        void InformationSection::load(const nlohmann::json &data) {
+            m_enabled = data.value<bool>("enabled", true);
+        }
+        [[nodiscard]] nlohmann::json InformationSection::store() {
+            nlohmann::json data;
+            data["enabled"] = m_enabled.load();
+
+            return data;
+        }
+
         namespace impl {
 
             static AutoReset<std::vector<CreateCallback>> s_informationSectionConstructors;
@@ -1430,22 +1544,19 @@ namespace hex {
         }
 
     }
+    
 
-    namespace ContentRegistry::Disassembler {
+    namespace ContentRegistry::Disassemblers::impl {
 
-        namespace impl {
+        static AutoReset<std::map<std::string, impl::CreatorFunction>> s_architectures;
 
-            static AutoReset<std::map<std::string, impl::CreatorFunction>> s_architectures;
+        void addArchitectureCreator(impl::CreatorFunction function) {
+            const auto arch = function();
+            (*s_architectures)[arch->getName()] = std::move(function);
+        }
 
-            void addArchitectureCreator(impl::CreatorFunction function) {
-                const auto arch = function();
-                (*s_architectures)[arch->getName()] = std::move(function);
-            }
-
-            const std::map<std::string, impl::CreatorFunction>& getArchitectures() {
-                return *s_architectures;
-            }
-
+        const std::map<std::string, impl::CreatorFunction>& getArchitectures() {
+            return *s_architectures;
         }
 
     }

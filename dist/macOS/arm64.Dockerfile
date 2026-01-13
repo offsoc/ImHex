@@ -1,7 +1,7 @@
 # This base image is also known as "crosscompile". See arm64.crosscompile.Dockerfile
-FROM ghcr.io/itrooz/macos-crosscompile:clang19-nosdk as build
+FROM ghcr.io/werwolv/macos-crosscompile:6d89b20ac5ebedb6f680f94637591c94cb36f40b as build
 
-ENV MACOSX_DEPLOYMENT_TARGET 13.0
+ENV MACOSX_DEPLOYMENT_TARGET 11.0
 
 # -- DOWNLOADING STUFF
 
@@ -17,13 +17,13 @@ cp /tmp/arm-osx-mytriplet.cmake /vcpkg/triplets/community/arm-osx-mytriplet.cmak
 EOF
 
 ## Install make
-RUN --mount=type=cache,target=/var/lib/apt/lists/ apt update && apt install -y make
+RUN --mount=type=cache,target=/var/lib/apt/lists/ apt update && apt install -y make cmake
 
 ## fix environment
 ### add install_name_tool for cmake command that won't have the right env set (see PostprocessBundle.cmake function postprocess_bundle())
 RUN cp /osxcross/build/cctools-port/cctools/misc/install_name_tool /usr/bin/install_name_tool
 ### a cmake thing wants 'otool' and not '' apparently
-RUN cp /osxcross/target/bin/aarch64-apple-darwin23-otool /usr/bin/otool
+RUN cp /osxcross/target/bin/aarch64-apple-darwin24-otool /usr/bin/otool
 
 ## Clone glfw
 RUN <<EOF
@@ -36,10 +36,10 @@ EOF
 RUN --mount=type=cache,target=/cache <<EOF
 ## Download SDK is missing (it may have been removed from the image)
 set -xe
-if [ ! -d /osxcross/target/SDK/MacOSX14.0.sdk ]; then
-    wget https://github.com/joseluisq/macosx-sdks/releases/download/14.0/MacOSX14.0.sdk.tar.xz -O /cache/MacOSX14.0.sdk.tar.xz -nc || true
+if [ ! -d /osxcross/target/SDK/MacOSX15.0.sdk ]; then
+    wget https://github.com/joseluisq/macosx-sdks/releases/download/15.0/MacOSX15.0.sdk.tar.xz -O /cache/MacOSX15.0.sdk.tar.xz -nc || true
     mkdir -p /osxcross/target/SDK
-    tar -C /osxcross/target/SDK -xf /cache/MacOSX14.0.sdk.tar.xz
+    tar -C /osxcross/target/SDK -xf /cache/MacOSX15.0.sdk.tar.xz
 fi
 EOF
 
@@ -67,6 +67,8 @@ vcpkg install --triplet=arm-osx-mytriplet zlib
 vcpkg install --triplet=arm-osx-mytriplet bzip2
 vcpkg install --triplet=arm-osx-mytriplet liblzma
 vcpkg install --triplet=arm-osx-mytriplet zstd
+vcpkg install --triplet=arm-osx-mytriplet openssl
+vcpkg install --triplet=arm-osx-mytriplet libssh2
 EOF
 
 ## Install glfw3 dep
@@ -99,7 +101,7 @@ RUN --mount=type=cache,target=/cache <<EOF
     make -j $JOBS install
 
     # Now, we cross-compile it and install it in the libraries folder
-    CC=/osxcross/target/bin/aarch64-apple-darwin23-clang CXX=/osxcross/target/bin/aarch64-apple-darwin23-clang++ ./configure --prefix /vcpkg/installed/arm-osx-mytriplet --host $OSXCROSS_HOST
+    CC=/osxcross/target/bin/aarch64-apple-darwin24-clang CXX=/osxcross/target/bin/aarch64-apple-darwin24-clang++ ./configure --prefix /vcpkg/installed/arm-osx-mytriplet --host $OSXCROSS_HOST
     make -j $JOBS
     make install
 
@@ -130,6 +132,7 @@ if [ "$CUSTOM_GLFW" ]; then
     mkdir build
     cd build
     CC=o64-clang CXX=o64-clang++ cmake -G "Ninja"       \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0            \
           -DCMAKE_BUILD_TYPE=$BUILD_TYPE                \
           -DBUILD_SHARED_LIBS=ON                        \
           -DCMAKE_C_COMPILER_LAUNCHER=ccache            \
@@ -137,7 +140,7 @@ if [ "$CUSTOM_GLFW" ]; then
           -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache         \
           -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache       \
           -DCMAKE_INSTALL_PREFIX=/vcpkg/installed/arm-osx-mytriplet \
-          -DVCPKG_TARGET_TRIPLET=arm-osx-mytriplet -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/osxcross/target/toolchain.cmake -DCMAKE_OSX_SYSROOT=/osxcross/target/SDK/MacOSX14.0.sdk -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+          -DVCPKG_TARGET_TRIPLET=arm-osx-mytriplet -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/osxcross/target/toolchain.cmake -DCMAKE_OSX_SYSROOT=/osxcross/target/SDK/MacOSX14.0.sdk -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
         ..
     ninja -j $JOBS install
 
@@ -148,25 +151,25 @@ EOF
 # Build ImHex
 ## Copy ImHex
 COPY --from=imhex / /mnt/ImHex
-## Patch ImHex with hacks
-# COPY toolchain.cmake.2 /osxcross/target/toolchain.cmake
-# Configure ImHex build
+## Configure ImHex build
 RUN --mount=type=cache,target=/cache --mount=type=cache,target=/mnt/ImHex/build/_deps \
     cd /mnt/ImHex && \
     # compilers
-    CC=o64-clang CXX=o64-clang++ OBJC=/osxcross/target/bin/aarch64-apple-darwin23-clang OBJCXX=/osxcross/target/bin/aarch64-apple-darwin23-clang++ \
+    CC=o64-clang CXX=o64-clang++ OBJC=/osxcross/target/bin/aarch64-apple-darwin24-clang OBJCXX=/osxcross/target/bin/aarch64-apple-darwin24-clang++ \
         cmake -G "Ninja" \
         `# ccache flags` \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
         `# MacOS cross-compiling flags` \
-        -DVCPKG_TARGET_TRIPLET=arm-osx-mytriplet -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/osxcross/target/toolchain.cmake -DCMAKE_OSX_SYSROOT=/osxcross/target/SDK/MacOSX14.0.sdk -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+        -DVCPKG_TARGET_TRIPLET=arm-osx-mytriplet -DCMAKE_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=/osxcross/target/toolchain.cmake -DCMAKE_OSX_SYSROOT=/osxcross/target/SDK/MacOSX14.0.sdk -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
         `# Override compilers for code generators` \
         -DNATIVE_CMAKE_C_COMPILER=/usr/bin/clang -DNATIVE_CMAKE_CXX_COMPILER=/usr/bin/clang++ \
         `# Normal ImHex flags` \
         -DIMHEX_GENERATE_PACKAGE=ON -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
         `# other flags` \
         -DIMHEX_STRICT_WARNINGS=OFF \
+        -DIMHEX_PATTERNS_PULL_MASTER=ON \
         -DCMAKE_INSTALL_PREFIX=/mnt/ImHex/build/install \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0            \
         -B build
 ## Build ImHex
 RUN --mount=type=cache,target=/cache --mount=type=cache,target=/mnt/ImHex/build/_deps <<EOF
@@ -181,4 +184,4 @@ EOF
 
 
 FROM scratch
-COPY --from=build /mnt/ImHex/build/install/imhex.app imhex.app
+COPY --from=build /mnt/ImHex/build/install/ImHex.app ImHex.app

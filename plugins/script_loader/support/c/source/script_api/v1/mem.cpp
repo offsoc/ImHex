@@ -1,7 +1,8 @@
 #include <script_api.hpp>
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/provider.hpp>
+#include <hex/api/imhex_api/provider.hpp>
+#include <hex/api/imhex_api/hex_editor.hpp>
 
-#include <hex/api/imhex_api.hpp>
 #include <hex/providers/provider.hpp>
 
 #define VERSION V1
@@ -59,7 +60,7 @@ public:
     using GetSizeFunction = u64(*)();
     using GetNameFunction = std::string(*)();
 
-    bool open() override { return true; }
+    OpenResult open() override { return {}; }
     void close() override { }
 
     [[nodiscard]] bool isAvailable() const override { return true; }
@@ -89,6 +90,7 @@ public:
     void setName(std::string name) { m_name = std::move(name);}
     [[nodiscard]] hex::UnlocalizedString getTypeName() const override { return m_typeName; }
     [[nodiscard]] std::string getName() const override { return m_name; }
+    const char* getIcon() const override { return ""; }
 
 private:
     ReadFunction m_readFunction = nullptr;
@@ -109,5 +111,5 @@ SCRIPT_API(void registerProvider, const char *typeName, const char *name, Script
         provider->setFunctions(readFunc, writeFunc, getSizeFunc);
         return provider;
     });
-    hex::ContentRegistry::Provider::impl::addProviderName(typeNameString);
+    hex::ContentRegistry::Provider::impl::addProviderName(typeNameString, "");
 }

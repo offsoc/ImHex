@@ -20,8 +20,6 @@ struct ImGuiSettingsHandler;
 
 namespace hex {
 
-    void nativeErrorMessage(const std::string &message);
-
     class Window {
     public:
         Window();
@@ -52,41 +50,26 @@ namespace hex {
         void exitImGui();
 
         void registerEventHandlers();
-        void loadPostProcessingShader();
+        void loadPostProcessingShader(const std::string &vertexShader, const std::string &fragmentShader);
+        void setupEmergencyPopups();
 
         void drawImGui();
         void drawWithShader();
-
         void unlockFrameRate();
-        void forceNewFrame();
 
         GLFWwindow *m_window = nullptr;
         ImGuiTestEngine *m_testEngine = nullptr;
 
         std::string m_windowTitle, m_windowTitleFull;
 
-        double m_lastStartFrameTime = 0;
-        double m_lastFrameTime = 0;
-
-        std::mutex m_popupMutex;
-        std::list<std::string> m_popupsToOpen;
         std::set<int> m_pressedKeys;
 
         ImGuiExt::ImHexCustomData m_imguiCustomData;
 
-        u32 m_searchBarPosition = 0;
         bool m_emergencyPopupOpen = false;
-
-        std::jthread m_frameRateThread;
-        std::chrono::duration<double, std::nano> m_remainingUnlockedTime;
-
-        std::mutex m_sleepMutex;
-        std::atomic<bool> m_sleepFlag;
-        std::condition_variable m_sleepCondVar;
-
-        std::mutex m_wakeupMutex;
-        std::atomic<bool> m_wakeupFlag;
-        std::condition_variable m_wakeupCondVar;
+        bool m_shouldUnlockFrameRate = false;
+        double m_fpsUnlockedEndTime = 0.0;
+        bool m_waitEventsBlocked = false;
 
         gl::Shader m_postProcessingShader;
     };

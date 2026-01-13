@@ -1,16 +1,13 @@
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/hex_editor.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/imhex_api/hex_editor.hpp>
 #include <hex/ui/imgui_imhex_extensions.h>
 
 #include <hex/helpers/utils.hpp>
 #include <pl/patterns/pattern.hpp>
 #include <wolv/utils/lock.hpp>
-
-#include <wolv/utils/string.hpp>
-
 
 namespace hex::plugin::builtin {
 
@@ -54,9 +51,9 @@ namespace hex::plugin::builtin {
         void zerosMiniMapVisualizer(u64, std::span<const u8> data, std::vector<ImColor> &output) {
             for (u8 byte : data) {
                 if (byte == 0x00)
-                    output.push_back(ImColor(1.0F, 1.0F, 1.0F, 1.0F));
+                    output.emplace_back(1.0F, 1.0F, 1.0F, 1.0F);
                 else
-                    output.push_back(ImColor(0.0F, 0.0F, 0.0F, 1.0F));
+                    output.emplace_back(0.0F, 0.0F, 0.0F, 1.0F);
             }
         }
 
@@ -91,6 +88,30 @@ namespace hex::plugin::builtin {
             }
         }
 
+        using ColorFunc = ImColor(*)(std::span<const u8> data);
+        void colorMinimapVisualizer(u64, std::span<const u8> data, std::vector<ImColor> &output, size_t colorSize, ColorFunc func) {
+            size_t count = data.size() / colorSize;
+            for (size_t i = 0; i < count; i += 1) {
+                ImColor color = func(data.subspan(i * colorSize));
+                output.push_back(color);
+            }
+        }
+
+        void rgba8MiniMapVisualizer(u64 address, std::span<const u8> data, std::vector<ImColor> &output) {
+            colorMinimapVisualizer(address, data, output, 4, [](std::span<const u8> subData) -> ImColor {
+                return {subData[0], subData[1], subData[2], 0xFF};
+            });
+        }
+
+        void rgb565MiniMapVisualizer(u64 address, std::span<const u8> data, std::vector<ImColor> &output) {
+            colorMinimapVisualizer(address, data, output, 2, [](std::span<const u8> subData) -> ImColor {
+                u8 r = (subData[0] & 0xF8);
+                u8 g = ((subData[0] & 0x07) << 5) | ((subData[1] & 0xE0) >> 3);
+                u8 b = (subData[1] & 0x1F) << 3;
+                return {r, g, b, 0xFF};
+            });
+        }
+
         void highlightsMiniMapVisualizer(u64 address, std::span<const u8> data, std::vector<ImColor> &output) {
             for (size_t i = 0; i < data.size(); i += 1) {
                 std::optional<ImColor> result;
@@ -101,7 +122,7 @@ namespace hex::plugin::builtin {
 
                 if (!result.has_value()) {
                     for (const auto &[id, highlighting] : ImHexApi::HexEditor::impl::getBackgroundHighlights()) {
-                        if (highlighting.getRegion().overlaps({ address, 1 })) {
+                        if (highlighting.getRegion().overlaps({ .address=address, .size=1 })) {
                             result = highlighting.getColor();
                             break;
                         }
@@ -112,7 +133,7 @@ namespace hex::plugin::builtin {
                     result->Value.w = 1.0F;
                 } else {
                     if (auto region = ImHexApi::HexEditor::getSelection(); region.has_value()) {
-                        if (region->overlaps({ address + i, 1 }))
+                        if (region->overlaps({ .address=address + i, .size=1 }))
                             result = 0x60C08080;
                     }
                 }
@@ -131,6 +152,8 @@ namespace hex::plugin::builtin {
         ContentRegistry::HexEditor::addMiniMapVisualizer("hex.builtin.minimap_visualizer.ascii_count",      asciiCountMiniMapVisualizer);
         ContentRegistry::HexEditor::addMiniMapVisualizer("hex.builtin.minimap_visualizer.byte_type",        byteTypeMiniMapVisualizer);
         ContentRegistry::HexEditor::addMiniMapVisualizer("hex.builtin.minimap_visualizer.byte_magnitude",   byteMagnitudeMiniMapVisualizer);
+        ContentRegistry::HexEditor::addMiniMapVisualizer("hex.builtin.minimap_visualizer.rgba8",            rgba8MiniMapVisualizer);
+        ContentRegistry::HexEditor::addMiniMapVisualizer("hex.builtin.minimap_visualizer.rgb565",           rgb565MiniMapVisualizer);
     }
 
 }

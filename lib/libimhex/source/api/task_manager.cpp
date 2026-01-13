@@ -7,6 +7,9 @@
 #include <ranges>
 
 #include <jthread.hpp>
+#include <hex/helpers/debugging.hpp>
+#include <hex/trace/exceptions.hpp>
+#include <utility>
 
 #if defined(OS_WINDOWS)
     #include <windows.h>
@@ -52,6 +55,7 @@ namespace hex {
         std::list<std::function<void()>> s_deferredCalls;
         std::unordered_map<SourceLocationWrapper, std::function<void()>> s_onceDeferredCalls;
         std::list<std::function<void()>> s_tasksFinishedCallbacks;
+        std::list<std::function<void(Task&)>> s_taskCompletionCallbacks;
 
         std::mutex s_queueMutex;
         std::condition_variable s_jobCondVar;
@@ -59,11 +63,12 @@ namespace hex {
 
         thread_local std::array<char, 256> s_currentThreadName;
         thread_local Task* s_currentTask = nullptr;
+        std::thread::id s_mainThreadId;
 
     }
 
 
-    Task::Task(const UnlocalizedString &unlocalizedName, u64 maxValue, bool background, bool blocking, std::function<void(Task &)> function)
+    Task::Task(UnlocalizedString unlocalizedName, u64 maxValue, bool background, bool blocking, std::function<void(Task &)> function)
     : m_unlocalizedName(std::move(unlocalizedName)),
       m_maxValue(maxValue),
       m_function(std::move(function)),
@@ -81,9 +86,17 @@ namespace hex {
         m_maxValue    = u64(other.m_maxValue);
         m_currValue   = u64(other.m_currValue);
 
-        m_finished        = bool(other.m_finished);
-        m_hadException    = bool(other.m_hadException);
-        m_interrupted     = bool(other.m_interrupted);
+        if (other.m_finished.test())
+            m_finished.test_and_set();
+        if (other.m_hadException.test())
+            m_hadException.test_and_set();
+        if (other.m_interrupted.test())
+            m_interrupted.test_and_set();
+
+        m_finished.notify_all();
+        m_hadException.notify_all();
+        m_interrupted.notify_all();
+
         m_shouldInterrupt = bool(other.m_shouldInterrupt);
     }
 
@@ -142,11 +155,11 @@ namespace hex {
 
 
     bool Task::isFinished() const {
-        return m_finished;
+        return m_finished.test();
     }
 
     bool Task::hadException() const {
-        return m_hadException;
+        return m_hadException.test();
     }
 
     bool Task::shouldInterrupt() const {
@@ -154,11 +167,11 @@ namespace hex {
     }
 
     bool Task::wasInterrupted() const {
-        return m_interrupted;
+        return m_interrupted.test();
     }
 
     void Task::clearException() {
-        m_hadException = false;
+        m_hadException.clear();
     }
 
     std::string Task::getExceptionMessage() const {
@@ -179,12 +192,18 @@ namespace hex {
         return m_maxValue;
     }
 
+    void Task::wait() const {
+        m_finished.wait(false);
+    }
+
     void Task::finish() {
-        m_finished = true;
+        m_finished.test_and_set();
+        m_finished.notify_all();
     }
 
     void Task::interruption() {
-        m_interrupted = true;
+        m_interrupted.test_and_set();
+        m_interrupted.notify_all();
     }
 
     void Task::exception(const char *message) {
@@ -192,7 +211,12 @@ namespace hex {
 
         // Store information about the caught exception
         m_exceptionMessage = message;
-        m_hadException = true;
+        m_hadException.test_and_set();
+        m_hadException.notify_all();
+
+        // Call the interrupt callback on the current thread if one is set
+        if (m_interruptCallback)
+            m_interruptCallback();
     }
 
 
@@ -209,7 +233,7 @@ namespace hex {
         if (!task)
             return false;
 
-        return !task->hadException();
+        return task->hadException();
     }
 
     bool TaskHolder::shouldInterrupt() const {
@@ -217,7 +241,7 @@ namespace hex {
         if (!task)
             return false;
 
-        return !task->shouldInterrupt();
+        return task->shouldInterrupt();
     }
 
     bool TaskHolder::wasInterrupted() const {
@@ -225,7 +249,7 @@ namespace hex {
         if (!task)
             return false;
 
-        return !task->wasInterrupted();
+        return task->wasInterrupted();
     }
 
     void TaskHolder::interrupt() const {
@@ -234,6 +258,14 @@ namespace hex {
             return;
 
         task->interrupt();
+    }
+
+    void TaskHolder::wait() const {
+        const auto &task = m_task.lock();
+        if (!task)
+            return;
+
+        task->wait();
     }
 
     u32 TaskHolder::getProgress() const {
@@ -282,6 +314,8 @@ namespace hex {
                     }
 
                     try {
+                        trace::enableExceptionCaptureForCurrentThread();
+
                         // Set the thread name to the name of the task
                         TaskManager::setCurrentThreadName(Lang(task->m_unlocalizedName));
 
@@ -289,20 +323,33 @@ namespace hex {
                         task->m_function(*task);
 
                         log::debug("Task '{}' finished", task->m_unlocalizedName.get());
+
+                        {
+                            std::scoped_lock lock(s_tasksFinishedMutex);
+
+                            for (const auto &callback : s_taskCompletionCallbacks)
+                                callback(*task);
+                        }
                     } catch (const Task::TaskInterruptor &) {
                         // Handle the task being interrupted by user request
                         task->interruption();
                     } catch (const std::exception &e) {
                         log::error("Exception in task '{}': {}", task->m_unlocalizedName.get(), e.what());
 
+                        dbg::printStackTrace(trace::getStackTrace());
+
                         // Handle the task throwing an uncaught exception
                         task->exception(e.what());
                     } catch (...) {
                         log::error("Exception in task '{}'", task->m_unlocalizedName.get());
 
+                        dbg::printStackTrace(trace::getStackTrace());
+
                         // Handle the task throwing an uncaught exception of unknown type
                         task->exception("Unknown Exception");
                     }
+
+                    trace::disableExceptionCaptureForCurrentThread();
 
                     s_currentTask = nullptr;
                     task->finish();
@@ -322,7 +369,10 @@ namespace hex {
             thread.request_stop();
 
         // Wake up all the idle worker threads so they can exit
-        s_jobCondVar.notify_all();
+        {
+            std::unique_lock lock(s_queueMutex);
+            s_jobCondVar.notify_all();
+        }
 
         // Wait for all worker threads to exit
         s_workers.clear();
@@ -333,13 +383,14 @@ namespace hex {
         s_deferredCalls.clear();
         s_onceDeferredCalls.clear();
         s_tasksFinishedCallbacks.clear();
+        s_taskCompletionCallbacks.clear();
     }
 
     TaskHolder TaskManager::createTask(const UnlocalizedString &unlocalizedName, u64 maxValue, bool background, bool blocking, std::function<void(Task&)> function) {
         std::scoped_lock lock(s_queueMutex);
 
         // Construct new task
-        auto task = std::make_shared<Task>(std::move(unlocalizedName), maxValue, background, blocking, std::move(function));
+        auto task = std::make_shared<Task>(unlocalizedName, maxValue, background, blocking, std::move(function));
 
         s_tasks.emplace_back(task);
 
@@ -354,12 +405,12 @@ namespace hex {
 
     TaskHolder TaskManager::createTask(const UnlocalizedString &unlocalizedName, u64 maxValue, std::function<void(Task &)> function) {
         log::debug("Creating task {}", unlocalizedName.get());
-        return createTask(std::move(unlocalizedName), maxValue, false, false, std::move(function));
+        return createTask(unlocalizedName, maxValue, false, false, std::move(function));
     }
 
     TaskHolder TaskManager::createTask(const UnlocalizedString &unlocalizedName, u64 maxValue, std::function<void()> function) {
         log::debug("Creating task {}", unlocalizedName.get());
-        return createTask(std::move(unlocalizedName), maxValue, false, false,
+        return createTask(unlocalizedName, maxValue, false, false,
             [function = std::move(function)](Task&) {
                 function();
             }
@@ -368,12 +419,12 @@ namespace hex {
 
     TaskHolder TaskManager::createBackgroundTask(const UnlocalizedString &unlocalizedName, std::function<void(Task &)> function) {
         log::debug("Creating background task {}", unlocalizedName.get());
-        return createTask(std::move(unlocalizedName), 0, true, false, std::move(function));
+        return createTask(unlocalizedName, 0, true, false, std::move(function));
     }
 
     TaskHolder TaskManager::createBackgroundTask(const UnlocalizedString &unlocalizedName, std::function<void()> function) {
         log::debug("Creating background task {}", unlocalizedName.get());
-        return createTask(std::move(unlocalizedName), 0, true, false,
+        return createTask(unlocalizedName, 0, true, false,
             [function = std::move(function)](Task&) {
                 function();
             }
@@ -382,12 +433,12 @@ namespace hex {
 
     TaskHolder TaskManager::createBlockingTask(const UnlocalizedString &unlocalizedName, u64 maxValue, std::function<void(Task &)> function) {
         log::debug("Creating blocking task {}", unlocalizedName.get());
-        return createTask(std::move(unlocalizedName), maxValue, true, true, std::move(function));
+        return createTask(unlocalizedName, maxValue, true, true, std::move(function));
     }
 
     TaskHolder TaskManager::createBlockingTask(const UnlocalizedString &unlocalizedName, u64 maxValue, std::function<void()> function) {
         log::debug("Creating blocking task {}", unlocalizedName.get());
-        return createTask(std::move(unlocalizedName), maxValue, true, true,
+        return createTask(unlocalizedName, maxValue, true, true,
             [function = std::move(function)](Task&) {
                 function();
             }
@@ -404,7 +455,7 @@ namespace hex {
 
         if (s_tasks.empty()) {
             std::scoped_lock lock(s_deferredCallsMutex);
-            for (auto &call : s_tasksFinishedCallbacks)
+            for (const auto &call : s_tasksFinishedCallbacks)
                 call();
             s_tasksFinishedCallbacks.clear();
         }
@@ -526,9 +577,28 @@ namespace hex {
         #endif
     }
 
-    std::string TaskManager::getCurrentThreadName() {
-        return s_currentThreadName.data();
+    std::string_view TaskManager::getCurrentThreadName() {
+        if (TaskManager::isMainThread())
+            return "Main";
+        else
+            return s_currentThreadName.data();
     }
 
+    void TaskManager::setMainThreadId(std::thread::id threadId) {
+        s_mainThreadId = threadId;
+    }
 
+    bool TaskManager::isMainThread() {
+        return s_mainThreadId == std::this_thread::get_id();
+    }
+
+    void TaskManager::addTaskCompletionCallback(const std::function<void(Task &)> &function) {
+        std::scoped_lock lock(s_tasksFinishedMutex);
+
+        for (const auto &task : s_tasks) {
+            task->interrupt();
+        }
+
+        s_taskCompletionCallbacks.push_back(function);
+    }
 }

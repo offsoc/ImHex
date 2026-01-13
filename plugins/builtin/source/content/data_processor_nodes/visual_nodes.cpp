@@ -1,8 +1,11 @@
-#include <imgui_internal.h>
-#include <hex/api/content_registry.hpp>
-#include <hex/helpers/utils.hpp>
 #include <hex/data_processor/node.hpp>
+
+#include <hex/api/content_registry/data_processor.hpp>
+
 #include <hex/ui/imgui_imhex_extensions.h>
+
+#include <hex/helpers/utils.hpp>
+#include <hex/helpers/scaling.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -78,10 +81,10 @@ namespace hex::plugin::builtin {
                     for (auto y = clipper.DisplayStart; y < clipper.DisplayEnd; y++) {
                         auto lineSize = ((size - y * 0x10) < 0x10) ? size % 0x10 : 0x10;
 
-                        std::string line = hex::format(" {:08X}:  ", y * 0x10);
+                        std::string line = fmt::format(" {:08X}:  ", y * 0x10);
                         for (u32 x = 0; x < 0x10; x++) {
                             if (x < lineSize)
-                                line += hex::format("{:02X} ", m_buffer[y * 0x10 + x]);
+                                line += fmt::format("{:02X} ", m_buffer[y * 0x10 + x]);
                             else
                                 line += "   ";
 
@@ -181,11 +184,11 @@ namespace hex::plugin::builtin {
     };
 
     void registerVisualDataProcessorNodes() {
-        ContentRegistry::DataProcessorNode::add<NodeDisplayInteger>("hex.builtin.nodes.display", "hex.builtin.nodes.display.int");
-        ContentRegistry::DataProcessorNode::add<NodeDisplayFloat>("hex.builtin.nodes.display", "hex.builtin.nodes.display.float");
-        ContentRegistry::DataProcessorNode::add<NodeDisplayBuffer>("hex.builtin.nodes.display", "hex.builtin.nodes.display.buffer");
-        ContentRegistry::DataProcessorNode::add<NodeDisplayString>("hex.builtin.nodes.display", "hex.builtin.nodes.display.string");
-        ContentRegistry::DataProcessorNode::add<NodeDisplayBits>("hex.builtin.nodes.display", "hex.builtin.nodes.display.bits");
+        ContentRegistry::DataProcessor::add<NodeDisplayInteger>("hex.builtin.nodes.display", "hex.builtin.nodes.display.int");
+        ContentRegistry::DataProcessor::add<NodeDisplayFloat>("hex.builtin.nodes.display", "hex.builtin.nodes.display.float");
+        ContentRegistry::DataProcessor::add<NodeDisplayBuffer>("hex.builtin.nodes.display", "hex.builtin.nodes.display.buffer");
+        ContentRegistry::DataProcessor::add<NodeDisplayString>("hex.builtin.nodes.display", "hex.builtin.nodes.display.string");
+        ContentRegistry::DataProcessor::add<NodeDisplayBits>("hex.builtin.nodes.display", "hex.builtin.nodes.display.bits");
     }
 
 }

@@ -1,4 +1,4 @@
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/data_information.hpp>
 
 #include <imgui.h>
 #include <hex/api/task_manager.hpp>
@@ -8,6 +8,9 @@
 #include <content/yara_rule.hpp>
 #include <romfs/romfs.hpp>
 #include <wolv/io/file.hpp>
+
+#include <set>
+#include <fonts/vscode_icons.hpp>
 
 namespace hex::plugin::yara {
 
@@ -89,9 +92,11 @@ namespace hex::plugin::yara {
                     ImGui::EndTable();
                 }
             } else {
-                ImGui::NewLine();
+                ImGui::BeginDisabled();
                 ImGuiExt::TextFormattedCenteredHorizontal("{}", "hex.yara.information_section.advanced_data_info.no_information"_lang);
-                ImGui::NewLine();
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGuiExt::HelpHover("hex.yara.information_section.advanced_data_info.no_information.add_new"_lang, ICON_VS_INFO);
             }
         }
 

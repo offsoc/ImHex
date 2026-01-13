@@ -37,13 +37,14 @@ EXPORT_MODULE namespace hex {
     };
 
 
-    constexpr static auto CTRL              = Key(static_cast<Keys>(0x0100'0000));
-    constexpr static auto ALT               = Key(static_cast<Keys>(0x0200'0000));
-    constexpr static auto SHIFT             = Key(static_cast<Keys>(0x0400'0000));
-    constexpr static auto SUPER             = Key(static_cast<Keys>(0x0800'0000));
-    constexpr static auto CurrentView       = Key(static_cast<Keys>(0x1000'0000));
-    constexpr static auto AllowWhileTyping  = Key(static_cast<Keys>(0x2000'0000));
-    constexpr static auto CTRLCMD           = Key(static_cast<Keys>(0x4000'0000));
+    constexpr static auto CTRL                  = Key(static_cast<Keys>(0x0100'0000));
+    constexpr static auto ALT                   = Key(static_cast<Keys>(0x0200'0000));
+    constexpr static auto SHIFT                 = Key(static_cast<Keys>(0x0400'0000));
+    constexpr static auto SUPER                 = Key(static_cast<Keys>(0x0800'0000));
+    constexpr static auto CurrentView           = Key(static_cast<Keys>(0x1000'0000));
+    constexpr static auto AllowWhileTyping      = Key(static_cast<Keys>(0x2000'0000));
+    constexpr static auto CTRLCMD               = Key(static_cast<Keys>(0x4000'0000));
+    constexpr static auto ShowOnWelcomeScreen   = Key(static_cast<Keys>(0x8000'0000));
 
     class Shortcut {
     public:
@@ -149,6 +150,8 @@ EXPORT_MODULE namespace hex {
          * @brief Clear all shortcuts
          */
         static void clearShortcuts();
+
+        static Shortcut getShortcutByName(const std::vector<UnlocalizedString> &unlocalizedName, const View *view = nullptr);
 
         static void resumeShortcuts();
         static void pauseShortcuts();

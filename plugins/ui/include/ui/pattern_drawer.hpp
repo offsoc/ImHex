@@ -1,7 +1,6 @@
 #pragma once
 
 #include <hex/api/task_manager.hpp>
-#include <hex/api/content_registry.hpp>
 #include <ui/visualizer_drawer.hpp>
 
 #include <pl/patterns/pattern.hpp>
@@ -10,7 +9,8 @@
 #include <pl/formatters.hpp>
 
 #include <set>
-#include <pl/patterns/pattern_error.hpp>
+
+#include <ui/pattern_value_editor.hpp>
 
 struct ImGuiTableSortSpecs;
 
@@ -20,9 +20,12 @@ namespace hex::ui {
     public:
         PatternDrawer() {
             m_formatters = pl::gen::fmt::createFormatters();
+            m_valueEditor = PatternValueEditor([this]() {
+                this->resetEditing();
+            });
         }
 
-        virtual ~PatternDrawer() = default;
+        ~PatternDrawer() override = default;
 
         void draw(const std::vector<std::shared_ptr<pl::ptrn::Pattern>> &patterns, const pl::PatternLanguage *runtime = nullptr, float height = 0.0F);
 
@@ -74,43 +77,50 @@ namespace hex::ui {
 
         void drawArray(pl::ptrn::Pattern& pattern, pl::ptrn::IIterable &iterable, bool isInlined);
         u64& getDisplayEnd(const pl::ptrn::Pattern& pattern);
-        void makeSelectable(const pl::ptrn::Pattern &pattern);
+        void makeSelectable(pl::ptrn::Pattern &pattern);
 
         void drawValueColumn(pl::ptrn::Pattern& pattern);
         void drawFavoriteColumn(const pl::ptrn::Pattern& pattern);
-        bool drawNameColumn(const pl::ptrn::Pattern &pattern, bool leaf = false);
+        bool drawNameColumn(pl::ptrn::Pattern &pattern, bool leaf = false);
         void drawColorColumn(const pl::ptrn::Pattern& pattern);
         void drawCommentColumn(const pl::ptrn::Pattern& pattern);
 
-        bool beginPatternTable(const std::vector<std::shared_ptr<pl::ptrn::Pattern>> &patterns, std::vector<pl::ptrn::Pattern*> &sortedPatterns, float height) const;
+        bool beginPatternTable(const std::vector<std::shared_ptr<pl::ptrn::Pattern>> &patterns, std::vector<std::shared_ptr<pl::ptrn::Pattern>> &sortedPatterns, float height) const;
         bool createTreeNode(const pl::ptrn::Pattern& pattern, bool leaf = false);
-        void createDefaultEntry(const pl::ptrn::Pattern &pattern);
+        void createDefaultEntry(pl::ptrn::Pattern &pattern);
         void closeTreeNode(bool inlined) const;
 
         bool sortPatterns(const ImGuiTableSortSpecs* sortSpecs, const pl::ptrn::Pattern * left, const pl::ptrn::Pattern * right) const;
         [[nodiscard]] bool isEditingPattern(const pl::ptrn::Pattern& pattern) const;
         void resetEditing();
-        void traversePatternTree(pl::ptrn::Pattern &pattern, std::vector<std::string> &patternPath, const std::function<void(pl::ptrn::Pattern&)> &callback);
+        void traversePatternTree(const std::shared_ptr<pl::ptrn::Pattern> &pattern, std::vector<std::string> &patternPath, const std::function<void(const std::shared_ptr<pl::ptrn::Pattern>&)> &callback);
         [[nodiscard]] std::string getDisplayName(const pl::ptrn::Pattern& pattern) const;
 
         [[nodiscard]] std::vector<std::string> getPatternPath(const pl::ptrn::Pattern *pattern) const;
 
         struct Filter {
             std::vector<std::string> path;
+
+            bool inverted = false;
+            bool typeMatch = false;
+            std::strong_ordering operation = std::strong_ordering::equal;
             std::optional<pl::core::Token::Literal> value;
         };
 
         [[nodiscard]] static bool matchesFilter(const std::vector<std::string> &filterPath, const std::vector<std::string> &patternPath, bool fullMatch);
         [[nodiscard]] static std::optional<Filter> parseRValueFilter(const std::string &filter);
+        [[nodiscard]] static std::optional<Filter> parseComparison(const Filter &currFilter, std::string filterString);
         void updateFilter();
 
     private:
         std::map<const pl::ptrn::Pattern*, u64> m_displayEnd;
-        std::vector<pl::ptrn::Pattern*> m_sortedPatterns;
+        std::vector<std::shared_ptr<pl::ptrn::Pattern>> m_sortedPatterns;
 
         const pl::ptrn::Pattern *m_editingPattern = nullptr;
+        const pl::ptrn::Pattern *m_contextMenuPattern = nullptr;
         u64 m_editingPatternOffset = 0;
         hex::ui::VisualizerDrawer m_visualizerDrawer;
+        hex::ui::PatternValueEditor m_valueEditor;
 
         TreeStyle m_treeStyle = TreeStyle::Default;
         bool m_rowColoring = false;
@@ -121,8 +131,8 @@ namespace hex::ui {
         std::set<pl::ptrn::Pattern*> m_visualizedPatterns;
 
         std::string m_filterText;
-        Filter m_filter;
-        std::vector<pl::ptrn::Pattern*> m_filteredPatterns;
+        std::optional<Filter> m_filter;
+        std::vector<std::shared_ptr<pl::ptrn::Pattern>> m_filteredPatterns;
 
         std::vector<std::string> m_currPatternPath;
         std::map<std::vector<std::string>, std::shared_ptr<pl::ptrn::Pattern>> m_favorites;

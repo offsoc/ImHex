@@ -7,6 +7,12 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      commit_hash:
+        type: string
+        description: 'The commit hash to build (defaults to the latest commit on the default branch)'
+        required: false
+        default: ''
 
 jobs:
   release-update-repos:
@@ -25,7 +31,7 @@ jobs:
           project_version=`cat ImHex/VERSION`
           tag_version="${{github.event.release.tag_name}}"
           tag_version="${tag_version:1}"
-          if [ "$project_version" != "$tag_version" ]; then
+          if [ "$project_version" != "$tag_version" ] && [ ! -z "$tag_version" ]; then
             echo "::warning::$project_version and $tag_version are not the same ! Refusing to populate release"
             exit 1
           fi
@@ -41,6 +47,7 @@ jobs:
           tag: ImHex-v${{ env.IMHEX_VERSION }}
           repo: PatternLanguage
           token: ${{ secrets.RELEASE_TOKEN }}
+          skipIfReleaseExists: true
 
       - name: 🎫 Create ImHex-Patterns release
         uses: ncipollo/release-action@v1
@@ -51,6 +58,7 @@ jobs:
           tag: ImHex-v${{ env.IMHEX_VERSION }}
           repo: ImHex-Patterns
           token: ${{ secrets.RELEASE_TOKEN }}
+          skipIfReleaseExists: true
 
       - name: 🎫 Create imhex-download-sdk release
         uses: ncipollo/release-action@v1
@@ -61,11 +69,13 @@ jobs:
           tag: v${{ env.IMHEX_VERSION }}
           repo: imhex-download-sdk
           token: ${{ secrets.RELEASE_TOKEN }}
+          skipIfReleaseExists: true
 
   release-upload-artifacts:
     runs-on: ubuntu-24.04
     name: Release Upload Artifacts
-
+    outputs:
+      IMHEX_VERSION: ${{ steps.verify_version.outputs.IMHEX_VERSION }}
     steps:
       - name: 🧰 Checkout
         uses: actions/checkout@v4
@@ -74,17 +84,19 @@ jobs:
           submodules: recursive
 
       - name: 📜 Verify version and set version variable
+        id: verify_version
         run: |
           set -x
           project_version=`cat ImHex/VERSION`
           tag_version="${{github.event.release.tag_name}}"
           tag_version="${tag_version:1}"
-          if [ "$project_version" != "$tag_version" ]; then
+          if [ "$project_version" != "$tag_version" ] && [ ! -z "$tag_version" ]; then
             echo "::warning::$project_version and $tag_version are not the same ! Refusing to populate release"
             exit 1
           fi
 
           echo "IMHEX_VERSION=$project_version" >> $GITHUB_ENV
+          echo "IMHEX_VERSION=$project_version" >> $GITHUB_OUTPUT
 
       - name: 🗜️ Create tarball from sources with dependencies
         run: tar --exclude-vcs -czvf Full.Sources.tar.gz ImHex
@@ -92,11 +104,12 @@ jobs:
       - name: ⬇️ Download artifacts from latest workflow
         uses: dawidd6/action-download-artifact@v7
         with:
-          github_token: ${{secrets.GITHUB_TOKEN}}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           workflow: build.yml
           branch: ${{ github.event.release.target_commitish }}
           workflow_conclusion: success
           skip_unpack: true
+          commit: ${{ github.event.inputs.commit_hash }}
 
       - name: 🗜️ Unzip files when needed
         run: |
@@ -115,24 +128,87 @@ jobs:
 
       - name: 🟩 Rename artifacts when needed
         run: |
-          mv "Windows Portable x86_64.zip" imhex-${{ env.IMHEX_VERSION }}-Windows-Portable-x86_64.zip
-          mv "Windows Portable NoGPU x86_64.zip" imhex-${{ env.IMHEX_VERSION }}-Windows-Portable-NoGPU-x86_64.zip
-          mv "ImHex Web.zip" imhex-${{ env.IMHEX_VERSION }}-Web.zip
-          rm artifact.tar
+          mv "Windows Portable x86_64.zip" imhex-${{ env.IMHEX_VERSION }}-Windows-Portable-x86_64.zip || true
+          mv "Windows Portable arm64.zip" imhex-${{ env.IMHEX_VERSION }}-Windows-Portable-arm64.zip || true
+          mv "Windows Portable NoGPU x86_64.zip" imhex-${{ env.IMHEX_VERSION }}-Windows-Portable-NoGPU-x86_64.zip || true
+          mv "ImHex Web.zip" imhex-${{ env.IMHEX_VERSION }}-Web.zip || true
+          rm artifact.tar || true
+
+      - name: ⬆️ Upload Unsigned x86_64 Windows Installer
+        uses: actions/upload-artifact@v4
+        id: upload-installer-x86_64
+        with:
+          if-no-files-found: error
+          name: Windows Installer x86_64
+          path: |
+            imhex-*-x86_64.msi
+
+      - name: ⬆️ Upload Unsigned ARM64 Windows Installer
+        if: false
+        uses: actions/upload-artifact@v4
+        id: upload-installer-arm64
+        with:
+          if-no-files-found: error
+          name: Windows Installer ARM64
+          path: |
+            imhex-*-arm64.msi
+
+      - name: 🗑️ Delete unsigned installers
+        run: |
+          rm imhex-*-x86_64.msi
+
+      - name: 🗝️ Sign x86_64 Installer
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: 'f605a0e8-86cd-411c-bb6f-e05025afcc33'
+          project-slug: 'ImHex'
+          signing-policy-slug: 'release-signing'
+          github-artifact-id: '${{ steps.upload-installer-x86_64.outputs.artifact-id }}'
+          wait-for-completion: true
+          output-artifact-directory: '.'
+
+      - name: 🗝️ Sign ARM64 Installer
+        if: false
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: 'f605a0e8-86cd-411c-bb6f-e05025afcc33'
+          project-slug: 'ImHex'
+          signing-policy-slug: 'release-signing'
+          github-artifact-id: '${{ steps.upload-installer-arm64.outputs.artifact-id }}'
+          wait-for-completion: true
+          output-artifact-directory: '.'
 
       - name: ⬆️ Upload everything to release
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           files: '*'
 
+  release-update-aur:
+    name: Release update AUR package
+    needs: release-upload-artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 🧰 Checkout
+        uses: actions/checkout@v4
+        with:
+          path: ImHex
+
+      - name: ⬇️ Download artifacts
+        run: |
+          tagname=${GITHUB_REF#refs/tags/}
+          version=${tagname#v}
+          wget https://github.com/WerWolv/ImHex/releases/download/${tagname}/imhex-${version}-ArchLinux-x86_64.pkg.tar.zst 
+
       - name: ✒️ Prepare PKGBUILD
         run: |
           set -x
           cp ImHex/dist/Arch/PKGBUILD .
           
-          hash=`md5sum imhex-${{ env.IMHEX_VERSION }}-ArchLinux-x86_64.pkg.tar.zst | cut -d ' ' -f 1`
+          hash=`md5sum imhex-${{ needs.release-upload-artifacts.outputs.IMHEX_VERSION }}-ArchLinux-x86_64.pkg.tar.zst | cut -d ' ' -f 1`
 
-          sed -i 's/%version%/${{ env.IMHEX_VERSION }}/g' PKGBUILD
+          sed -i 's/%version%/${{ needs.release-upload-artifacts.outputs.IMHEX_VERSION }}/g' PKGBUILD
           sed -i "s/(SKIP)/($hash)/g" PKGBUILD
 
       - name: ⬆️ Publish AUR package
@@ -146,9 +222,9 @@ jobs:
           pkgname: imhex-bin
           pkgbuild: ./PKGBUILD
           commit_username: iTrooz
-          commit_email: itrooz@protonmail.com
+          commit_email: hey@itrooz.fr
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: Bump to version ${{ env.IMHEX_VERSION }}
+          commit_message: Bump to version ${{ needs.release-upload-artifacts.outputs.IMHEX_VERSION }}
           ssh_keyscan_types: rsa,ecdsa,ed25519
 
   release-update-winget:
@@ -160,6 +236,7 @@ jobs:
         shell: pwsh
         run: |
           iwr https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
       - name: ⬆️ Update winget manifest
         shell: pwsh
         env:
@@ -173,3 +250,33 @@ jobs:
           if ($version -notmatch "-") {
             .\wingetcreate.exe submit .\manifests\w\WerWolv\ImHex\${version}\ --token $env:WINGET_GITHUB_TOKEN
           }
+
+  release-update-snapstore:
+    name: Release update snapstore package
+    needs: release-upload-artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: ⬇️ Download artifacts
+        run: |
+          tagname=${GITHUB_REF#refs/tags/}
+          version=${tagname#v}
+          wget https://github.com/WerWolv/ImHex/releases/download/${tagname}/imhex-${version}-x86_64.snap
+          wget https://github.com/WerWolv/ImHex/releases/download/${tagname}/imhex-${version}-arm64.snap
+
+      - name: ⬆️ Publish x86_64 Snap package
+        continue-on-error: true
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_LOGIN }}
+        with:
+          snap: imhex-${{ needs.release-upload-artifacts.outputs.IMHEX_VERSION }}-x86_64.snap
+          release: stable
+
+      - name: ⬆️ Publish arm64 Snap package
+        continue-on-error: true
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_LOGIN }}
+        with:
+          snap: imhex-${{ needs.release-upload-artifacts.outputs.IMHEX_VERSION }}-arm64.snap
+          release: stable

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <hex/helpers/patches.hpp>
 
 #include <hex/helpers/utils.hpp>
@@ -5,7 +6,6 @@
 #include <hex/providers/provider.hpp>
 
 #include <cstring>
-#include <string_view>
 
 
 namespace hex {
@@ -24,7 +24,7 @@ namespace hex {
             [[nodiscard]] bool isSavable()   const override { return false; }
             [[nodiscard]] bool isSavableAsRecent() const override { return false; }
 
-            [[nodiscard]] bool open() override { return true; }
+            [[nodiscard]] OpenResult open() override { return {}; }
             void close() override { }
 
             void readRaw(u64 offset, void *buffer, size_t size) override {
@@ -43,10 +43,6 @@ namespace hex {
                     return 0;
                 else
                     return m_patches.rbegin()->first;
-            }
-
-            void resizeRaw(u64 newSize) override {
-                std::ignore = newSize;
             }
 
             void insertRaw(u64 offset, u64 size) override {
@@ -81,9 +77,13 @@ namespace hex {
                 return "";
             }
 
+            [[nodiscard]] const char* getIcon() const override {
+                return "";
+            }
+
             [[nodiscard]] UnlocalizedString getTypeName() const override { return ""; }
 
-            const std::map<u64, u8>& getPatches() const {
+            [[nodiscard]] const std::map<u64, u8>& getPatches() const {
                 return m_patches;
             }
         private:
@@ -92,7 +92,7 @@ namespace hex {
 
 
         void pushStringBack(std::vector<u8> &buffer, const std::string &string) {
-            std::copy(string.begin(), string.end(), std::back_inserter(buffer));
+            std::ranges::copy(string, std::back_inserter(buffer));
         }
 
         template<typename T>

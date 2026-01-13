@@ -1,43 +1,89 @@
 #include <iostream>
+#include <mutex>
 #include <hex/trace/stacktrace.hpp>
 
 #include <llvm/Demangle/Demangle.h>
 
-namespace {
+namespace hex::trace {
 
-    [[maybe_unused]] std::string tryDemangle(const std::string &symbolName) {
-        if (auto variant1 = llvm::demangle(symbolName); variant1 != symbolName)
-            return variant1;
+    std::string demangle(const std::string &symbolName) {
+        if (auto result = llvm::demangle(symbolName); result != symbolName)
+            return result;
 
-        if (auto variant2 = llvm::demangle(std::string("_") + symbolName); variant2 != std::string("_") + symbolName)
-            return variant2;
+        if (auto result = llvm::demangle(std::string("_") + symbolName); result != std::string("_") + symbolName)
+            return result;
+
+        if (auto result = llvm::demangle(std::string("_Z") + symbolName); result != std::string("_Z") + symbolName)
+            return result;
 
         return symbolName;
     }
 
 }
 
+static std::mutex s_traceMutex;
 
 #if defined(HEX_HAS_STD_STACKTRACE) && __has_include(<stacktrace>)
 
     #include <stacktrace>
+    
+    #if __has_include(<dlfcn.h>)
+
+        #include <filesystem>
+        #include <dlfcn.h>
+        #include <fmt/format.h>
+
+    #endif
 
     namespace hex::trace {
+
+        static std::string toUTF8String(const auto &value) {
+            auto result = value.generic_u8string();
+
+            return { result.begin(), result.end() };
+        }
 
         void initialize() {
 
         }
 
         StackTraceResult getStackTrace() {
+            std::lock_guard lock(s_traceMutex);
+
             StackTrace result;
 
             auto stackTrace = std::stacktrace::current();
 
             for (const auto &entry : stackTrace) {
-                if (entry.source_line() == 0 && entry.source_file().empty())
-                    result.emplace_back("", "??", 0);
-                else
+                if (entry.source_line() == 0 && entry.source_file().empty()) {
+                    #if __has_include(<dlfcn.h>)
+                        Dl_info info = {};
+                        dladdr(reinterpret_cast<const void*>(entry.native_handle()), &info);
+
+                        std::string description;
+
+                        auto path = info.dli_fname != nullptr ? std::optional<std::filesystem::path>{info.dli_fname} : std::nullopt;
+                        auto filePath = path ? toUTF8String(*path) : "??";
+                        auto fileName = path ? toUTF8String(path->filename()) : "";
+
+                        if (info.dli_sname != nullptr) {
+                            description = demangle(info.dli_sname);
+                            if (info.dli_saddr != reinterpret_cast<const void*>(entry.native_handle())) {
+                                auto symOffset = entry.native_handle() - reinterpret_cast<uintptr_t>(info.dli_saddr);
+                                description += fmt::format("+0x{:x}", symOffset);
+                            }
+                        } else {
+                            auto rvaOffset = entry.native_handle() - reinterpret_cast<uintptr_t>(info.dli_fbase);
+                            description = fmt::format("{}+0x{:08x}", fileName, rvaOffset);
+                        }
+
+                        result.emplace_back(filePath, description, 0);
+                    #else
+                        result.emplace_back("", "??", 0);
+                    #endif
+                } else {
                     result.emplace_back(entry.source_file(), entry.description(), entry.source_line());
+                }
             }
 
             return { result, "std::stacktrace" };
@@ -58,6 +104,8 @@ namespace {
         }
 
         StackTraceResult getStackTrace() {
+            std::lock_guard lock(s_traceMutex);
+
             std::vector<StackFrame> stackTrace;
 
             HANDLE process = GetCurrentProcess();
@@ -74,21 +122,33 @@ namespace {
             STACKFRAME64 stackFrame;
             ZeroMemory(&stackFrame, sizeof(STACKFRAME64));
 
-            image = IMAGE_FILE_MACHINE_AMD64;
             #if defined(_X86_)
+                image = IMAGE_FILE_MACHINE_I386;
                 stackFrame.AddrPC.Offset = context.Eip;
                 stackFrame.AddrPC.Mode = AddrModeFlat;
                 stackFrame.AddrFrame.Offset = context.Esp;
                 stackFrame.AddrFrame.Mode = AddrModeFlat;
                 stackFrame.AddrStack.Offset = context.Esp;
                 stackFrame.AddrStack.Mode = AddrModeFlat;
-            #else
+            #elif defined(_ARM64_)
+                image = IMAGE_FILE_MACHINE_ARM64;
+                stackFrame.AddrPC.Offset = context.Pc;
+                stackFrame.AddrPC.Mode = AddrModeFlat;
+                stackFrame.AddrFrame.Offset = context.Sp;
+                stackFrame.AddrFrame.Mode = AddrModeFlat;
+                stackFrame.AddrStack.Offset = context.Sp;
+                stackFrame.AddrStack.Mode = AddrModeFlat;
+            #elif defined(_AMD64_)
+                image = IMAGE_FILE_MACHINE_AMD64;
                 stackFrame.AddrPC.Offset = context.Rip;
                 stackFrame.AddrPC.Mode = AddrModeFlat;
                 stackFrame.AddrFrame.Offset = context.Rsp;
                 stackFrame.AddrFrame.Mode = AddrModeFlat;
                 stackFrame.AddrStack.Offset = context.Rsp;
                 stackFrame.AddrStack.Mode = AddrModeFlat;
+            #else
+                #warning "Unsupported architecture! Add support for your architecture here."
+                return {};
             #endif
 
             while (true) {
@@ -131,7 +191,7 @@ namespace {
                     fileName = "??";
                 }
 
-                auto demangledName = tryDemangle(symbolName);
+                auto demangledName = demangle(symbolName);
                 stackTrace.push_back(StackFrame { fileName, demangledName, lineNumber });
             }
 
@@ -158,6 +218,8 @@ namespace {
             }
 
             StackTraceResult getStackTrace() {
+                std::scoped_lock lock(s_traceMutex);
+
                 static std::vector<StackFrame> result;
 
                 std::array<void*, 128> addresses = {};
@@ -168,12 +230,12 @@ namespace {
                     dladdr(addresses[i], &info);
 
                     auto fileName = info.dli_fname != nullptr ? std::filesystem::path(info.dli_fname).filename().string() : "??";
-                    auto demangledName = info.dli_sname != nullptr ? tryDemangle(info.dli_sname) : "??";
+                    auto demangledName = info.dli_sname != nullptr ? demangle(info.dli_sname) : "??";
 
-                    result.push_back(StackFrame { std::move(fileName), std::move(demangledName), 0 });
+                    result.push_back(StackFrame { .file=std::move(fileName), .function=std::move(demangledName), .line=0 });
                 }
 
-                return StackTraceResult{ result, "execinfo" };
+                return StackTraceResult{ .stackFrames=result, .implementationName="execinfo" };
             }
 
         }
@@ -194,6 +256,8 @@ namespace {
 
 
             void initialize() {
+                std::lock_guard lock(s_traceMutex);
+
                 if (auto executablePath = wolv::io::fs::getExecutablePath(); executablePath.has_value()) {
                     static std::string path = executablePath->string();
                     s_backtraceState = backtrace_create_state(path.c_str(), 1, [](void *, const char *, int) { }, nullptr);
@@ -201,6 +265,8 @@ namespace {
             }
 
             StackTraceResult getStackTrace() {
+                std::lock_guard lock(s_traceMutex);
+
                 static std::vector<StackFrame> result;
 
                 if (s_backtraceState != nullptr) {
@@ -210,7 +276,7 @@ namespace {
                         if (function == nullptr)
                             function = "??";
 
-                        result.push_back(StackFrame { std::filesystem::path(fileName).filename().string(), tryDemangle(function), std::uint32_t(lineNumber) });
+                        result.push_back(StackFrame { std::filesystem::path(fileName).filename().string(), demangle(function), std::uint32_t(lineNumber) });
 
                         return 0;
                     }, nullptr, nullptr);
@@ -230,6 +296,8 @@ namespace {
 
         void initialize() { }
         StackTraceResult getStackTrace() {
+            std::lock_guard lock(s_traceMutex);
+
             return StackTraceResult {
                 {StackFrame { "??", "Stacktrace collecting not available!", 0 }},
                 "none"

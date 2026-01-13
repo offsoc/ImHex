@@ -1,9 +1,8 @@
 #include "content/providers/motorola_srec_provider.hpp"
 
-
 #include <hex/api/localization_manager.hpp>
-#include <hex/helpers/utils.hpp>
 #include <hex/helpers/fmt.hpp>
+#include <hex/helpers/utils.hpp>
 
 #include <wolv/io/file.hpp>
 #include <wolv/io/fs.hpp>
@@ -57,21 +56,21 @@ namespace hex::plugin::builtin {
                 return value;
             };
 
-            enum class RecordType {
-                Header          = 0x00,
-                Data16          = 0x01,
-                Data24          = 0x02,
-                Data32          = 0x03,
-                Reserved        = 0x04,
-                Count16         = 0x05,
-                Count24         = 0x06,
-                StartAddress32  = 0x07,
-                StartAddress24  = 0x08,
-                StartAddress16  = 0x09,
-            } recordType;
-
-            bool endOfFile = false;
             try {
+                enum class RecordType: u8 {
+                    Header          = 0x00,
+                    Data16          = 0x01,
+                    Data24          = 0x02,
+                    Data32          = 0x03,
+                    Reserved        = 0x04,
+                    Count16         = 0x05,
+                    Count24         = 0x06,
+                    StartAddress32  = 0x07,
+                    StartAddress24  = 0x08,
+                    StartAddress16  = 0x09,
+                } recordType;
+                bool endOfFile = false;
+
                 while (offset < string.length()) {
                     // Parse record start
                     if (c() != 'S')
@@ -148,7 +147,6 @@ namespace hex::plugin::builtin {
                             break;
                         case RecordType::Header:
                         case RecordType::Reserved:
-                            break;
                         case RecordType::Count16:
                         case RecordType::Count24:
                             break;
@@ -159,7 +157,7 @@ namespace hex::plugin::builtin {
                             break;
                     }
 
-                    while (std::isspace(string[offset]) && offset < string.length())
+                    while (offset < string.length() && std::isspace(string[offset]))
                         offset++;
                 }
             } catch (const std::runtime_error &e) {
@@ -171,32 +169,19 @@ namespace hex::plugin::builtin {
 
     }
 
-    bool MotorolaSRECProvider::open() {
+    prv::Provider::OpenResult MotorolaSRECProvider::open() {
         auto file = wolv::io::File(m_sourceFilePath, wolv::io::File::Mode::Read);
         if (!file.isValid()) {
-            this->setErrorMessage(hex::format("hex.builtin.provider.file.error.open"_lang, m_sourceFilePath.string(), formatSystemError(errno)));
-            return false;
+            return OpenResult::failure(fmt::format("hex.builtin.provider.file.error.open"_lang, m_sourceFilePath.string(), formatSystemError(errno)));
         }
 
         auto data = motorola_srec::parseMotorolaSREC(file.readString());
         if (!data.has_value()) {
-            this->setErrorMessage(data.error());
-            return false;
+            return OpenResult::failure(data.error());
         }
+        processMemoryRegions(data);
 
-        u64 maxAddress = 0x00;
-        for (auto &[address, bytes] : data.value()) {
-            auto endAddress = (address + bytes.size()) - 1;
-            m_data.emplace({ address, endAddress }, std::move(bytes));
-
-            if (endAddress > maxAddress)
-                maxAddress = endAddress;
-        }
-
-        m_dataSize = maxAddress + 1;
-        m_dataValid = true;
-
-        return true;
+        return {};
     }
 
     void MotorolaSRECProvider::close() {
@@ -204,7 +189,7 @@ namespace hex::plugin::builtin {
     }
 
     [[nodiscard]] std::string MotorolaSRECProvider::getName() const {
-        return hex::format("hex.builtin.provider.motorola_srec.name"_lang, wolv::util::toUTF8String(m_sourceFilePath.filename()));
+        return fmt::format("hex.builtin.provider.motorola_srec.name"_lang, wolv::util::toUTF8String(m_sourceFilePath.filename()));
     }
 
 

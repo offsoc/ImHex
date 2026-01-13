@@ -52,9 +52,23 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/dist"
       }
-    }
+    },
+  {
+      "name": "vs2022-x86",
+      "displayName": "Visual Studio 2022 x86",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+          "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+          "VCPKG_MANIFEST_DIR": "${sourceDir}/dist"
+      },
+      "environment": {
+          "VSCMD_ARG_TGT_ARCH": "x86"
+      }
+  }
   ],
   "buildPresets": [
     {

@@ -1,6 +1,8 @@
 #include "content/views/view_bookmarks.hpp"
 
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/reports.hpp>
+#include <hex/api/content_registry/views.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
 #include <hex/api/project_file_manager.hpp>
 #include <hex/api/achievement_manager.hpp>
 #include <hex/api/task_manager.hpp>
@@ -18,6 +20,7 @@
 
 #include <wolv/io/file.hpp>
 #include <wolv/utils/guards.hpp>
+#include "imgui_internal.h"
 
 namespace hex::plugin::builtin {
 
@@ -26,7 +29,7 @@ namespace hex::plugin::builtin {
         // Handle bookmark add requests sent by the API
         RequestAddBookmark::subscribe(this, [this](Region region, std::string name, std::string comment, color_t color, u64 *id) {
             if (name.empty()) {
-                name = hex::format("hex.builtin.view.bookmarks.default_title"_lang, region.address, region.address + region.size - 1);
+                name = fmt::format("hex.builtin.view.bookmarks.default_title"_lang, region.address, region.address + region.size - 1);
             }
 
             if (color == 0x00)
@@ -38,15 +41,15 @@ namespace hex::plugin::builtin {
                 *id = bookmarkId;
 
             auto bookmark = ImHexApi::Bookmarks::Entry {
-                region,
-                name,
-                std::move(comment),
-                color,
-                true,
-                bookmarkId
+                .region=region,
+                .name=name,
+                .comment=std::move(comment),
+                .color=color,
+                .locked=true,
+                .id=bookmarkId
             };
 
-            m_bookmarks->emplace_back(std::move(bookmark), true);
+            m_bookmarks->emplace_back(std::move(bookmark), true, ui::Markdown(bookmark.comment));
 
             ImHexApi::Provider::markDirty();
 
@@ -70,7 +73,7 @@ namespace hex::plugin::builtin {
                 if (!bookmark.highlightVisible)
                     continue;
 
-                if (Region { address, size }.isWithin(bookmark.entry.region)) {
+                if (Region { .address=address, .size=size }.isWithin(bookmark.entry.region)) {
                     color = blendColors(color, bookmark.entry.color);
                 }
             }
@@ -83,12 +86,12 @@ namespace hex::plugin::builtin {
             std::ignore = data;
 
             // Loop over all bookmarks
-            for (const auto &[bookmark, highlightVisible] : *m_bookmarks) {
+            for (auto &[bookmark, highlightVisible, commentDisplay] : *m_bookmarks) {
                 if (!highlightVisible)
                     continue;
 
                 // Make sure the bookmark overlaps the currently hovered address
-                if (!Region { address, size }.isWithin(bookmark.region))
+                if (!Region { .address=address, .size=size }.isWithin(bookmark.region))
                     continue;
 
                 // Draw tooltip
@@ -127,7 +130,7 @@ namespace hex::plugin::builtin {
                                     ImGuiExt::TextFormatted("{}: ", "hex.builtin.view.bookmarks.header.comment"_lang.get());
                                     ImGui::TableNextColumn();
                                     ImGui::PushTextWrapPos(ImGui::CalcTextSize("X").x * 40);
-                                    ImGuiExt::TextFormattedWrapped("{}", bookmark.comment);
+                                    commentDisplay.draw();
                                     ImGui::PopTextWrapPos();
                                 }
 
@@ -181,11 +184,11 @@ namespace hex::plugin::builtin {
 
             result += "## Bookmarks\n\n";
 
-            for (const auto &[bookmark, highlightVisible] : bookmarks) {
-                result += hex::format("### <span style=\"background-color: #{:06X}80\">{} [0x{:04X} - 0x{:04X}]</span>\n\n", hex::changeEndianness(bookmark.color, std::endian::big) >> 8, bookmark.name, bookmark.region.getStartAddress(), bookmark.region.getEndAddress());
+            for (const auto &[bookmark, highlightVisible, commentDisplay] : bookmarks) {
+                result += fmt::format("### <span style=\"background-color: #{:06X}80\">{} [0x{:04X} - 0x{:04X}]</span>\n\n", hex::changeEndianness(bookmark.color, std::endian::big) >> 8, bookmark.name, bookmark.region.getStartAddress(), bookmark.region.getEndAddress());
 
-                for (const auto &line : hex::splitString(bookmark.comment, "\n"))
-                    result += hex::format("> {}\n", line);
+                for (const auto &line : wolv::util::splitString(bookmark.comment, "\n"))
+                    result += fmt::format("> {}\n", line);
                 result += "\n";
 
                 result += "```\n";
@@ -259,7 +262,7 @@ namespace hex::plugin::builtin {
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + height);
         }
 
-        ImGui::InvisibleButton("##DropTarget", ImVec2(ImGui::GetContentRegionAvail().x, height * 2.0F));
+        ImGui::InvisibleButton("##DropTarget", ImVec2(std::max(1.0F, ImGui::GetContentRegionAvail().x), height * 2.0F));
         const auto dropTarget = ImRect(ImGui::GetItemRectMin(), ImVec2(ImGui::GetItemRectMax().x, ImGui::GetItemRectMin().y + 2_scaled));
 
         if (it == m_bookmarks->begin()) {
@@ -298,7 +301,12 @@ namespace hex::plugin::builtin {
         ImGuiExt::InputTextIcon("##filter", ICON_VS_FILTER, m_currFilter);
         ImGui::PopItemWidth();
 
-        if (ImGui::BeginChild("##bookmarks")) {
+        ImGui::NewLine();
+
+        ImGui::PushStyleVarY(ImGuiStyleVar_WindowPadding, -5_scaled);
+        bool open = ImGuiExt::BeginSubWindow("", nullptr, ImGui::GetContentRegionAvail());
+        ImGui::PopStyleVar();
+        if (open) {
             if (m_bookmarks->empty()) {
                 ImGuiExt::TextOverlay("hex.builtin.view.bookmarks.no_bookmarks"_lang, ImGui::GetWindowPos() + ImGui::GetWindowSize() / 2, ImGui::GetWindowWidth() * 0.7);
             }
@@ -306,12 +314,11 @@ namespace hex::plugin::builtin {
             auto bookmarkToRemove = m_bookmarks->end();
             const auto defaultItemSpacing = ImGui::GetStyle().ItemSpacing.y;
 
-            ImGui::Dummy({ ImGui::GetContentRegionAvail().x, 0 });
             drawDropTarget(m_bookmarks->begin(), defaultItemSpacing);
 
             // Draw all bookmarks
             for (auto it = m_bookmarks->begin(); it != m_bookmarks->end(); ++it) {
-                auto &[bookmark, highlightVisible] = *it;
+                auto &[bookmark, highlightVisible, commentDisplay] = *it;
                 auto &[region, name, comment, color, locked, bookmarkId] = bookmark;
 
                 // Apply filter
@@ -338,7 +345,7 @@ namespace hex::plugin::builtin {
                 bool notDeleted = true;
 
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2());
-                auto expanded = ImGui::CollapsingHeader(hex::format("{}###bookmark", name).c_str(), &notDeleted);
+                auto expanded = ImGui::CollapsingHeader(fmt::format("{}###bookmark", name).c_str(), &notDeleted);
                 ImGui::PopStyleVar();
 
                 if (!expanded) {
@@ -349,14 +356,14 @@ namespace hex::plugin::builtin {
                         ImGui::SetDragDropPayload("BOOKMARK_PAYLOAD", &bookmarkId, sizeof(bookmarkId));
 
                         // Draw drag and drop tooltip
-                        ImGui::ColorButton("##color", headerColor.Value, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoAlpha);
+                        ImGui::ColorButton("##color", headerColor.Value, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaOpaque);
                         ImGui::SameLine();
                         ImGuiExt::TextFormatted("{}", name);
 
                         if (!comment.empty()) {
                             ImGui::Separator();
                             ImGui::PushTextWrapPos(300_scaled);
-                            ImGuiExt::TextFormatted("{}", comment);
+                            commentDisplay.draw();
                             ImGui::PopTextWrapPos();
                         }
 
@@ -383,14 +390,13 @@ namespace hex::plugin::builtin {
                         auto provider = ImHexApi::Provider::get();
                         TaskManager::doLater([region, provider, name]{
                             auto newProvider = ImHexApi::Provider::createProvider("hex.builtin.provider.view", true);
-                            if (auto *viewProvider = dynamic_cast<ViewProvider*>(newProvider); viewProvider != nullptr) {
+                            if (auto *viewProvider = dynamic_cast<ViewProvider*>(newProvider.get()); viewProvider != nullptr) {
                                 viewProvider->setProvider(region.getStartAddress(), region.getSize(), provider);
-                                viewProvider->setName(hex::format("'{}' View", name));
+                                viewProvider->setName(fmt::format("'{}' View", name));
 
-                                if (viewProvider->open()) {
-                                    EventProviderOpened::post(viewProvider);
-                                    AchievementManager::unlockAchievement("hex.builtin.achievement.hex_editor", "hex.builtin.achievement.hex_editor.open_new_view.name");
-                                }
+                                ImHexApi::Provider::openProvider(newProvider);
+
+                                AchievementManager::unlockAchievement("hex.builtin.achievement.hex_editor", "hex.builtin.achievement.hex_editor.open_new_view.name");
                             }
                         });
                     }
@@ -514,7 +520,13 @@ namespace hex::plugin::builtin {
                         if (ImGuiExt::BeginSubWindow("hex.builtin.view.bookmarks.header.comment"_lang)) {
                             ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyleColorVec4(ImGuiCol_ChildBg));
                             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1_scaled);
-                            ImGui::InputTextMultiline("##comment", comment, ImVec2(ImGui::GetContentRegionAvail().x, 150_scaled), locked ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None);
+                            if (!locked) {
+                                if (ImGui::InputTextMultiline("##comment", comment, ImVec2(ImGui::GetContentRegionAvail().x, 150_scaled), locked ? ImGuiInputTextFlags_ReadOnly : ImGuiInputTextFlags_None)) {
+                                    commentDisplay = ui::Markdown(comment);
+                                }
+                            } else {
+                                commentDisplay.draw();
+                            }
                             ImGui::PopStyleVar();
                             ImGui::PopStyleColor();
                         }
@@ -535,7 +547,7 @@ namespace hex::plugin::builtin {
                 EventHighlightingChanged::post();
             }
         }
-        ImGui::EndChild();
+        ImGuiExt::EndSubWindow();
     }
 
     bool ViewBookmarks::importBookmarks(prv::Provider *provider, const nlohmann::json &json) {
@@ -552,7 +564,7 @@ namespace hex::plugin::builtin {
 
             m_bookmarks.get(provider).push_back({
                 {
-                    .region     = { region["address"], region["size"] },
+                    .region     = { .address=region["address"], .size=region["size"] },
                     .name       = bookmark["name"],
                     .comment    = bookmark["comment"],
                     .color      = bookmark["color"],
@@ -560,6 +572,7 @@ namespace hex::plugin::builtin {
                     .id         = bookmark.contains("id") ? bookmark["id"].get<u64>() : m_currBookmarkId.get(provider),
                 },
                 bookmark.contains("highlightVisible") ? bookmark["highlightVisible"].get<bool>() : true,
+                ui::Markdown(bookmark["comment"])
             });
             if (bookmark.contains("id"))
                 m_currBookmarkId.get(provider) = std::max<u64>(m_currBookmarkId.get(provider), bookmark["id"].get<i64>() + 1);
@@ -573,7 +586,7 @@ namespace hex::plugin::builtin {
     bool ViewBookmarks::exportBookmarks(prv::Provider *provider, nlohmann::json &json) {
         json["bookmarks"] = nlohmann::json::array();
         size_t index = 0;
-        for (const auto &[bookmark, highlightVisible]  : m_bookmarks.get(provider)) {
+        for (const auto &[bookmark, highlightVisible, commentDisplay]  : m_bookmarks.get(provider)) {
             json["bookmarks"][index] = {
                     { "name",       bookmark.name },
                     { "comment",    bookmark.comment },
@@ -596,31 +609,34 @@ namespace hex::plugin::builtin {
 
     void ViewBookmarks::registerMenuItems() {
         /* Create bookmark */
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.edit", "hex.builtin.menu.edit.bookmark.create" }, ICON_VS_BOOKMARK, 1900, CTRLCMD + Keys::B, [&] {
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.edit", "hex.builtin.menu.edit.bookmark.create" }, ICON_VS_BOOKMARK, 1900, CTRLCMD + Keys::B, [&] {
             if (!ImHexApi::HexEditor::isSelectionValid())
                 return;
 
             auto selection = ImHexApi::HexEditor::getSelection();
             ImHexApi::Bookmarks::add(selection->getStartAddress(), selection->getSize(), {}, {});
-        }, []{ return ImHexApi::Provider::isValid() && ImHexApi::HexEditor::isSelectionValid(); });
+        }, []{ return ImHexApi::Provider::isValid() && ImHexApi::HexEditor::isSelectionValid(); },
+        ContentRegistry::Views::getViewByName("hex.builtin.view.hex_editor.name"));
 
 
-        ContentRegistry::Interface::addMenuItemSeparator({ "hex.builtin.menu.file", "hex.builtin.menu.file.import" }, 3000);
+        ContentRegistry::UserInterface::addMenuItemSeparator({ "hex.builtin.menu.file", "hex.builtin.menu.file.import" }, 5400);
 
         /* Import bookmarks */
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.file", "hex.builtin.menu.file.import", "hex.builtin.menu.file.import.bookmark" }, ICON_VS_BOOKMARK, 3050, Shortcut::None, [this]{
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.file", "hex.builtin.menu.file.import", "hex.builtin.menu.file.import.bookmark" }, ICON_VS_BOOKMARK, 5500, Shortcut::None, [this]{
             fs::openFileBrowser(fs::DialogMode::Open, { { "Bookmarks File", "hexbm"} }, [&, this](const std::fs::path &path) {
                 try {
                     this->importBookmarks(ImHexApi::Provider::get(), nlohmann::json::parse(wolv::io::File(path, wolv::io::File::Mode::Read).readString()));
-                } catch (...) { }
+                } catch (const std::exception &e) {
+                    log::warn("Failed to import bookmarks: {}", e.what());
+                }
             });
         }, ImHexApi::Provider::isValid);
 
-        ContentRegistry::Interface::addMenuItemSeparator({ "hex.builtin.menu.file", "hex.builtin.menu.file.export" }, 6200);
+        ContentRegistry::UserInterface::addMenuItemSeparator({ "hex.builtin.menu.file", "hex.builtin.menu.file.export" }, 6200);
 
 
         /* Export bookmarks */
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.file", "hex.builtin.menu.file.export", "hex.builtin.menu.file.export.bookmark" }, ICON_VS_BOOKMARK, 6250, Shortcut::None, [this]{
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.file", "hex.builtin.menu.file.export", "hex.builtin.menu.file.export.bookmark" }, ICON_VS_BOOKMARK, 6250, Shortcut::None, [this]{
             fs::openFileBrowser(fs::DialogMode::Save, { { "Bookmarks File", "hexbm"} }, [&, this](const std::fs::path &path) {
                 nlohmann::json json;
                 this->exportBookmarks(ImHexApi::Provider::get(), json);
@@ -632,4 +648,18 @@ namespace hex::plugin::builtin {
         });
     }
 
+    void ViewBookmarks::drawHelpText() {
+        ImGuiExt::TextFormattedWrapped("All your created Bookmarks will be listed in here.");
+        ImGui::NewLine();
+        ImGuiExt::TextFormattedWrapped("Bookmarks provide an easy way to mark important regions in your binary and quickly navigate to them later. You can also name them, add further information through comments or change their color.");
+        ImGui::NewLine();
+        ImGuiExt::TextFormattedWrapped(
+            "To create a Bookmark, select a byte region in the Hex Editor view and use the {} option in the {} menu or use the shortcut '{}'.",
+            "hex.builtin.menu.edit.bookmark.create"_lang, "hex.builtin.menu.edit"_lang,
+            ShortcutManager::getShortcutByName(
+                { "hex.builtin.menu.edit", "hex.builtin.menu.edit.bookmark.create" },
+                ContentRegistry::Views::getViewByName("hex.builtin.view.hex_editor.name")
+            ).toString()
+        );
+    }
 }

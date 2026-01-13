@@ -1,0 +1,144 @@
+permissions:
+  contents: write
+
+name: Nightly Release
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  nightly-release:
+    runs-on: ubuntu-24.04
+    name: 🌃 Update Nightly Release
+    steps:
+      - name: 🧰 Checkout
+        uses: actions/checkout@v4
+        with:
+          path: ImHex
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 🌃 Check for new commits
+        id: check_commits
+        run: |
+          cd ImHex
+          git config --global --add safe.directory $(pwd)
+          if [ -z "$(git log nightly..HEAD --oneline)" ]; then
+            echo "No new commits since last nightly. Exiting."
+            echo "::set-output name=should_run::false"
+          else
+            echo "::set-output name=should_run::true"
+          fi
+
+      - name: 📜 Set version variable
+        if: ${{ steps.check_commits.outputs.should_run == 'true' }}
+        run: |
+          project_version=`cat ImHex/VERSION`          
+          echo "IMHEX_VERSION=$project_version" >> $GITHUB_ENV
+      
+      # TODO: Replace by Github CLI when github.com/cli/cli/pull/12435 is closed
+      - name: ⬇️ Download artifacts from latest workflow
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: build.yml
+          branch: master
+          workflow_conclusion: success
+          skip_unpack: true
+
+      - name: 🗜️ Unzip files when needed
+        if: ${{ steps.check_commits.outputs.should_run == 'true' }}
+        run: |
+          set -x
+          for zipfile in ./*.zip
+          do
+              if [ `zipinfo -1 "$zipfile" | wc -l` -eq 1 ];
+              then
+                echo "unzipping $zipfile"
+                unzip "$zipfile"
+                rm "$zipfile"
+              else
+                echo "keeping $zipfile zipped"
+              fi
+          done
+
+      - name: 🟩 Rename artifacts when needed
+        if: ${{ steps.check_commits.outputs.should_run == 'true' }}
+        run: |
+          mv "Windows Portable x86_64.zip" imhex-${{ env.IMHEX_VERSION }}-Windows-Portable-x86_64.zip
+          mv "Windows Portable arm64.zip" imhex-${{ env.IMHEX_VERSION }}-Windows-Portable-arm64.zip
+          mv "Windows Portable NoGPU x86_64.zip" imhex-${{ env.IMHEX_VERSION }}-Windows-Portable-NoGPU-x86_64.zip
+          mv "ImHex Web.zip" imhex-${{ env.IMHEX_VERSION }}-Web.zip
+          rm artifact.tar || true
+
+      - name: 📖 Generate Release Notes
+        if: ${{ steps.check_commits.outputs.should_run == 'true' }}
+        id: release_notes
+        continue-on-error: true
+        run: |
+          cd ImHex
+          echo "## Nightly ${GITHUB_SHA::7} Changelog" > changelog.md
+          git fetch --tags --recurse-submodules=no
+          git log nightly..origin/master --oneline --no-merges --pretty=format:'* %s' >> changelog.md
+
+      - name: 📦 Update Pre-Release
+        if: ${{ steps.check_commits.outputs.should_run == 'true' }}
+        run: |
+          set -e
+          
+          cd ImHex
+          
+          # Move nightly tag to latest commit
+          git tag -f nightly origin/master
+          git push origin nightly --force
+
+          # Auth for GitHub CLI
+          echo "${{ github.token }}" | gh auth login --with-token
+
+          # Delete existing assets
+          for asset in $(gh release view nightly --json assets --jq '.assets[].name'); do
+            gh release delete-asset nightly "$asset" --yes
+          done
+
+          # Update release notes
+          gh release edit nightly --notes-file changelog.md
+
+          # Upload new assets
+          gh release upload nightly ../*.* --clobber
+
+      - name: ⬆️ Publish x86_64 Snap package
+        if: ${{ steps.check_commits.outputs.should_run == 'true' }}
+        continue-on-error: true
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_LOGIN }}
+        with:
+          snap: imhex-${{ env.IMHEX_VERSION }}-x86_64.snap
+          release: edge
+
+      - name: ⬆️ Publish arm64 Snap package
+        if: ${{ steps.check_commits.outputs.should_run == 'true' }}
+        continue-on-error: true
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_LOGIN }}
+        with:
+          snap: imhex-${{ env.IMHEX_VERSION }}-arm64.snap
+          release: edge
+
+  website_update:
+    name: 🌍 Update ImHex Landing Website
+    needs: nightly-release
+    runs-on: ubuntu-24.04
+    env:
+      WEBSITE_DISPATCH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+    steps:
+     - name: ✉️ Dispatch Landing page update
+       if: ${{ env.WEBSITE_DISPATCH_TOKEN != '' }}
+       uses: peter-evans/repository-dispatch@v4
+       with:
+         token: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+         repository: WerWolv/ImHexWebsite
+         event-type: update_page

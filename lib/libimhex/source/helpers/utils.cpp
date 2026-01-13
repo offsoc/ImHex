@@ -1,6 +1,8 @@
+#include <algorithm>
+#include <cwchar>
 #include <hex/helpers/utils.hpp>
 
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/imhex_api/system.hpp>
 
 #include <hex/helpers/fmt.hpp>
 #include <hex/helpers/crypto.hpp>
@@ -13,39 +15,34 @@
 #include <GLFW/glfw3.h>
 #include <hex/api/events/events_lifecycle.hpp>
 
+#include <wolv/utils/string.hpp>
+
+#include <clocale>
+#include <sstream>
+#include <hex/helpers/auto_reset.hpp>
+
 #if defined(OS_WINDOWS)
     #include <windows.h>
     #include <shellapi.h>
+    #include <wchar.h>
 
     #include <wolv/utils/guards.hpp>
 #elif defined(OS_LINUX)
     #include <unistd.h>
     #include <dlfcn.h>
+    #include <spawn.h>
     #include <hex/helpers/utils_linux.hpp>
 #elif defined(OS_MACOS)
     #include <unistd.h>
     #include <dlfcn.h>
+    #include <spawn.h>
     #include <hex/helpers/utils_macos.hpp>
+    #include <CoreFoundation/CoreFoundation.h>
 #elif defined(OS_WEB)
     #include "emscripten.h"
 #endif
 
 namespace hex {
-    float operator""_scaled(long double value) {
-        return value * ImHexApi::System::getGlobalScale();
-    }
-
-    float operator""_scaled(unsigned long long value) {
-        return value * ImHexApi::System::getGlobalScale();
-    }
-
-    ImVec2 scaled(const ImVec2 &vector) {
-        return vector * ImHexApi::System::getGlobalScale();
-    }
-
-    ImVec2 scaled(float x, float y) {
-        return ImVec2(x, y) * ImHexApi::System::getGlobalScale();
-    }
 
     std::string to_string(u128 value) {
         char data[45] = { 0 };
@@ -99,12 +96,12 @@ namespace hex {
             return { };
 
         // Remove common hex prefixes and commas
-        string = hex::replaceStrings(string, "0x", "");
-        string = hex::replaceStrings(string, "0X", "");
-        string = hex::replaceStrings(string, ",", "");
+        string = wolv::util::replaceStrings(string, "0x", "");
+        string = wolv::util::replaceStrings(string, "0X", "");
+        string = wolv::util::replaceStrings(string, ",", "");
 
         // Check for non-hex characters
-        bool isValidHexString = std::find_if(string.begin(), string.end(), [](char c) {
+        bool isValidHexString = std::ranges::find_if(string, [](char c) {
             return !std::isxdigit(c) && !std::isspace(c);
         }) == string.end();
 
@@ -156,9 +153,9 @@ namespace hex {
         std::string result;
 
         if (unitIndex == 0)
-            result = hex::format("{0:}", value);
+            result = fmt::format("{0:}", value);
         else
-            result = hex::format("{0:.2f}", value);
+            result = fmt::format("{0:.2f}", value);
 
         switch (unitIndex) {
             case 0:
@@ -195,7 +192,7 @@ namespace hex {
             if (std::isprint(c))
                 result += c;
             else
-                result += hex::format("\\x{0:02X}", u8(c));
+                result += fmt::format("\\x{0:02X}", u8(c));
         }
 
         return result;
@@ -279,45 +276,6 @@ namespace hex {
         }
     }
 
-    std::vector<std::string> splitString(const std::string &string, const std::string &delimiter) {
-        size_t start = 0, end = 0;
-        std::vector<std::string> res;
-
-        while ((end = string.find(delimiter, start)) != std::string::npos) {
-            size_t size = end - start;
-            if (start + size > string.length())
-                break;
-
-            std::string token = string.substr(start, end - start);
-            start = end + delimiter.length();
-            res.push_back(token);
-        }
-
-        res.emplace_back(string.substr(start));
-        return res;
-    }
-
-    std::string combineStrings(const std::vector<std::string> &strings, const std::string &delimiter) {
-        std::string result;
-        for (const auto &string : strings) {
-            result += string;
-            result += delimiter;
-        }
-
-        return result.substr(0, result.length() - delimiter.length());
-    }
-
-    std::string replaceStrings(std::string string, const std::string &search, const std::string &replace) {
-        if (search.empty())
-            return string;
-
-        std::size_t pos;
-        while ((pos = string.find(search)) != std::string::npos)
-            string.replace(pos, search.size(), replace);
-
-        return string;
-    }
-
     std::string toEngineeringString(double value) {
         constexpr static std::array Suffixes = { "a", "f", "p", "n", "u", "m", "", "k", "M", "G", "T", "P", "E" };
 
@@ -336,40 +294,121 @@ namespace hex {
         return std::to_string(value).substr(0, 5) + Suffixes[suffixIndex];
     }
 
-    void startProgram(const std::string &command) {
-
-#if defined(OS_WINDOWS)
-        std::ignore = system(hex::format("start \"\" {0}", command).c_str());
-#elif defined(OS_MACOS)
-        std::ignore = system(hex::format("{0}", command).c_str());
-#elif defined(OS_LINUX)
-        executeCmd({"xdg-open", command});
-#elif defined(OS_WEB)
-        std::ignore = command;
-#endif
+    void startProgram(const std::vector<std::string> &command) {
+        #if defined(OS_WINDOWS)
+            std::ignore = system(fmt::format("start \"\" {0:?}", fmt::join(command, " ")).c_str());
+        #elif defined(OS_MACOS)
+            std::ignore = system(fmt::format("{0:?}", fmt::join(command, " ")).c_str());
+        #elif defined(OS_LINUX)
+            std::vector<std::string> xdgCommand = { "xdg-open" };
+            xdgCommand.insert(xdgCommand.end(), command.begin(), command.end());
+            executeCmd(xdgCommand);
+        #elif defined(OS_WEB)
+            std::ignore = command;
+        #endif
     }
 
     int executeCommand(const std::string &command) {
         return ::system(command.c_str());
     }
 
+    std::optional<std::string> executeCommandWithOutput(const std::string &command) {
+        std::array<char, 256> buffer = {};
+        std::string result;
+
+        #if defined(OS_WINDOWS)
+            FILE* pipe = _popen(command.c_str(), "r");
+        #else
+            FILE* pipe = popen(command.c_str(), "r");
+        #endif
+
+        if (!pipe) {
+            hex::log::error("Failed to open pipe for command: {}", command);
+            return std::nullopt;
+        }
+
+        try {
+            while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+                result += buffer.data();
+            }
+        } catch (const std::exception &e) {
+            hex::log::error("Exception while reading command output: {}", e.what());
+
+            #if defined(OS_WINDOWS)
+                _pclose(pipe);
+            #else
+                pclose(pipe);
+            #endif
+
+            return std::nullopt;
+        }
+
+        #if defined(OS_WINDOWS)
+            int exitCode = _pclose(pipe);
+        #else
+            int exitCode = pclose(pipe);
+        #endif
+
+        if (exitCode != 0) {
+            hex::log::debug("Command exited with code {}: {}", exitCode, command);
+        }
+
+        return result;
+    }
+
+    void executeCommandDetach(const std::string &command) {
+        #if defined(OS_WINDOWS)
+            STARTUPINFOA si = { };
+            PROCESS_INFORMATION pi = { };
+            si.cb = sizeof(si);
+
+            DWORD flags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
+            std::string cmdCopy = command;
+
+            BOOL result = ::CreateProcessA(
+                nullptr,
+                cmdCopy.data(),
+                nullptr,
+                nullptr,
+                false,
+                flags,
+                nullptr,
+                nullptr,
+                &si,
+                &pi
+            );
+
+            if (result) {
+                ::CloseHandle(pi.hProcess);
+                ::CloseHandle(pi.hThread);
+            }
+        #elif defined(OS_MACOS) || defined(OS_LINUX)
+            pid_t pid;
+            const char* argv[] = { "sh", "-c", command.c_str(), nullptr };
+
+            ::posix_spawnp(&pid, "sh", nullptr, nullptr, const_cast<char* const*>(argv), nullptr);
+        #elif defined(OS_WEB)
+            std::ignore = command;
+        #endif
+    }
+
     void openWebpage(std::string url) {
         if (!url.contains("://"))
             url = "https://" + url;
 
-#if defined(OS_WINDOWS)
-        ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-#elif defined(OS_MACOS)
-        openWebpageMacos(url.c_str());
-#elif defined(OS_LINUX)
-        executeCmd({"xdg-open", url});
-#elif defined(OS_WEB)
-        EM_ASM({
-            window.open(UTF8ToString($0), '_blank');
-        }, url.c_str());
-#else
-#warning "Unknown OS, can't open webpages"
-#endif
+        #if defined(OS_WINDOWS)
+            ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        #elif defined(OS_MACOS)
+            openWebpageMacos(url.c_str());
+        #elif defined(OS_LINUX)
+            executeCmd({ "xdg-open", url });
+        #elif defined(OS_WEB)
+            EM_ASM({
+                window.open(UTF8ToString($0), '_blank');
+            }, url.c_str());
+        #else
+            #warning "Unknown OS, can't open webpages"
+        #endif
     }
 
     std::optional<u8> hexCharToValue(char c) {
@@ -414,7 +453,7 @@ namespace hex {
                         result += "\\v";
                     break;
                     default:
-                        result += hex::format("\\x{:02X}", byte);
+                        result += fmt::format("\\x{:02X}", byte);
                     break;
                 }
             }
@@ -507,7 +546,7 @@ namespace hex {
             if (ch <= 0x7F) {
                 unicode = ch;
                 unicodeSize = 0;
-            } else if (ch <= 0xBF) {
+            } else if (ch <= 0xBF) { //NOLINT(bugprone-branch-clone)
                 return { };
             } else if (ch <= 0xDF) {
                 unicode = ch&0x1F;
@@ -568,7 +607,7 @@ namespace hex {
             index += 1;
 
             if (wch < 0xD800 || wch > 0xDFFF) {
-                unicode = static_cast<u32>(wch);
+                unicode = static_cast<u32>(wch); // NOLINT(cert-str34-c)
             } else if (wch >= 0xD800 && wch <= 0xDBFF) {
                 if (index == utf16.size())
                     return "";
@@ -612,43 +651,6 @@ namespace hex {
         return utf8;
     }
 
-    float float16ToFloat32(u16 float16) {
-        u32 sign     = float16 >> 15;
-        u32 exponent = (float16 >> 10) & 0x1F;
-        u32 mantissa = float16 & 0x3FF;
-
-        u32 result = 0x00;
-
-        if (exponent == 0) {
-            if (mantissa == 0) {
-                // +- Zero
-                result = sign << 31;
-            } else {
-                // Subnormal value
-                exponent = 0x7F - 14;
-
-                while ((mantissa & (1 << 10)) == 0) {
-                    exponent--;
-                    mantissa <<= 1;
-                }
-
-                mantissa &= 0x3FF;
-                result = (sign << 31) | (exponent << 23) | (mantissa << 13);
-            }
-        } else if (exponent == 0x1F) {
-            // +-Inf or +-NaN
-            result = (sign << 31) | (0xFF << 23) | (mantissa << 13);
-        } else {
-            // Normal value
-            result = (sign << 31) | ((exponent + (0x7F - 15)) << 23) | (mantissa << 13);
-        }
-
-        float floatResult = 0;
-        std::memcpy(&floatResult, &result, sizeof(float));
-
-        return floatResult;
-    }
-
     bool isProcessElevated() {
 #if defined(OS_WINDOWS)
         bool elevated = false;
@@ -682,13 +684,13 @@ namespace hex {
             return value;
     }
 
-    [[nodiscard]] std::string limitStringLength(const std::string &string, size_t maxLength) {
+    [[nodiscard]] std::string limitStringLength(const std::string &string, size_t maxLength, bool fromBothEnds) {
         // If the string is shorter than the max length, return it as is
         if (string.size() < maxLength)
             return string;
 
         // If the string is longer than the max length, find the last space before the max length
-        auto it = string.begin() + maxLength / 2;
+        auto it = string.begin() + (fromBothEnds ? maxLength / 2 : maxLength);
         while (it != string.begin() && !std::isspace(*it)) --it;
 
         // If there's no space before the max length, just cut the string
@@ -704,6 +706,9 @@ namespace hex {
             return string;
 
         auto result = std::string(string.begin(), it) + "…";
+
+        if (!fromBothEnds)
+            return result;
 
         // If the string is longer than the max length, find the last space before the max length
         it = string.end() - 1 - maxLength / 2;
@@ -730,9 +735,9 @@ namespace hex {
         return s_fileToOpen;
     }
 
-    static std::map<std::fs::path, std::string> s_fonts;
+    static AutoReset<std::map<std::fs::path, std::string>> s_fonts;
     extern "C" void registerFont(const char *fontName, const char *fontPath) {
-        s_fonts[fontPath] = fontName;
+        s_fonts->emplace(fontPath, fontName);
     }
 
     const std::map<std::fs::path, std::string>& getFonts() {
@@ -756,8 +761,8 @@ namespace hex {
                 u8 byte = *it;
 
                 if ((address % 0x10) == 0) {
-                    result += hex::format(" {}", asciiRow);
-                    result += hex::format("\n{0:08X}  ", address);
+                    result += fmt::format(" {}", asciiRow);
+                    result += fmt::format("\n{0:08X}  ", address);
 
                     asciiRow.clear();
 
@@ -774,7 +779,7 @@ namespace hex {
                     }
                 }
 
-                result += hex::format("{0:02X} ", byte);
+                result += fmt::format("{0:02X} ", byte);
                 asciiRow += std::isprint(byte) ? char(byte) : '.';
                 if ((address % 0x10) == 0x07)
                     result += " ";
@@ -786,7 +791,7 @@ namespace hex {
                 for (u32 i = 0; i < (0x10 - (address % 0x10)); i++)
                     result += "   ";
 
-            result += hex::format(" {}", asciiRow);
+            result += fmt::format(" {}", asciiRow);
 
             return result;
         }
@@ -858,15 +863,163 @@ namespace hex {
             return ImAlphaBlendColors(a.value(), b.value());
     }
 
-    extern "C" void macOSCloseButtonPressed() {
-        auto windowHandle = ImHexApi::System::getMainWindowHandle();
+    std::optional<std::chrono::system_clock::time_point> parseTime(std::string_view format, const std::string &timeString) {
+        std::istringstream input(timeString);
+        input.imbue(std::locale(std::setlocale(LC_ALL, nullptr)));
 
-        glfwHideWindow(windowHandle);
-        glfwIconifyWindow(windowHandle);
+        tm time = {};
+        input >> std::get_time(&time, std::string(format).data());
+        if (input.fail()) {
+            return std::nullopt;
+        }
+
+        return std::chrono::system_clock::from_time_t(std::mktime(&time));
+    }
+
+    std::optional<std::string> getOSLanguage() {
+        const static auto osLanguage = [] -> std::optional<std::string> {
+            #if defined(OS_WINDOWS)
+                const auto langId = ::GetUserDefaultUILanguage();
+                std::array<wchar_t, LOCALE_NAME_MAX_LENGTH> localeName;
+                if (::LCIDToLocaleName(MAKELCID(langId, SORT_DEFAULT), localeName.data(), localeName.size(), 0) > 0) {
+                    return utf16ToUtf8(localeName.data());
+                }
+
+                return std::nullopt;
+            #elif defined(OS_MACOS)
+                const auto langs = CFLocaleCopyPreferredLanguages();
+                if (langs == nullptr || CFArrayGetCount(langs) == 0)
+                    return std::nullopt;
+
+                ON_SCOPE_EXIT { CFRelease(langs); };
+
+                const auto lang = (CFStringRef)CFArrayGetValueAtIndex(langs, 0);
+                std::array<char, 256> buffer;
+                if (CFStringGetCString(lang, buffer.data(), buffer.size(), kCFStringEncodingUTF8)) {
+                    return std::string(buffer.data());
+                }
+
+                return std::nullopt;
+            #elif defined(OS_LINUX)
+                auto lang = getEnvironmentVariable("LC_ALL");
+                if (!lang.has_value()) lang = getEnvironmentVariable("LC_MESSAGES");
+                if (!lang.has_value()) lang = getEnvironmentVariable("LANG");
+
+                if (lang.has_value() && !lang->empty() && *lang != "C" && *lang != "C.UTF-8") {
+                    auto parts = wolv::util::splitString(*lang, ".");
+                    if (!parts.empty())
+                        return parts[0];
+                    else
+                        return lang;
+                }
+
+                return std::nullopt;
+            #elif defined(OS_WEB)
+                char *resultRaw = (char*)EM_ASM_PTR({
+                    return stringToNewUTF8(navigator.language.length > 0 ? navigator.language : navigator.languages[0]);
+                });
+
+                std::string result(resultRaw);
+                std::free(resultRaw);
+
+                return result;
+            #else
+                return std::nullopt;
+            #endif
+        }();
+
+        return osLanguage;
+    }
+
+    extern "C" void macOSCloseButtonPressed() {
+        EventCloseButtonPressed::post();
     }
 
     extern "C" void macosEventDataReceived(const u8 *data, size_t length) {
         EventNativeMessageReceived::post(std::vector<u8>(data, data + length));
+    }
+
+    void showErrorMessageBox(const std::string &message) {
+        log::fatal("{}", message);
+        #if defined(OS_WINDOWS)
+            MessageBoxA(nullptr, message.c_str(), "Error", MB_ICONERROR | MB_OK);
+        #elif defined (OS_MACOS)
+            errorMessageMacos(message.c_str());
+        #elif defined(OS_LINUX)
+            if (std::system(fmt::format(R"(zenity --error --text="{}")", message).c_str()) != 0) {
+                std::ignore = std::system(fmt::format(R"(notify-send -i "net.werwolv.ImHex" "Error" "{}")", message).c_str());
+            }
+        #elif defined(OS_WEB)
+            EM_ASM({
+                alert(UTF8ToString($0));
+            }, message.c_str());
+        #endif
+    }
+
+    void showToastMessage(const std::string &title, const std::string &message) {
+        #if defined(OS_WINDOWS)
+            const auto wideTitle = wolv::util::utf8ToWstring(title).value_or(L"???");
+            const auto wideMessage = wolv::util::utf8ToWstring(message).value_or(L"???");
+
+            WNDCLASS wc = { };
+            wc.lpfnWndProc = DefWindowProc;
+            wc.hInstance = GetModuleHandle(nullptr);
+            wc.lpszClassName = L"ImHex Toast";
+            RegisterClass(&wc);
+
+            HWND hwnd = CreateWindow(
+                wc.lpszClassName, L"", 0,
+                0, 0, 0, 0,
+                nullptr, nullptr, wc.hInstance, nullptr);
+
+            NOTIFYICONDATA nid = { };
+            nid.cbSize = sizeof(nid);
+            nid.hWnd = hwnd;
+            nid.uID = 1;
+            nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_INFO;
+            nid.uCallbackMessage = WM_USER + 1;
+            nid.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
+            nid.hIcon = LoadIcon(nullptr, IDI_INFORMATION);
+            nid.uTimeout = 5000;
+            wcsncpy(nid.szTip, L"ImHex", ARRAYSIZE(nid.szTip));
+            wcsncpy(nid.szInfoTitle, wideTitle.c_str(), ARRAYSIZE(nid.szInfoTitle));
+            wcsncpy(nid.szInfo, wideMessage.c_str(), ARRAYSIZE(nid.szInfo));
+
+            nid.dwInfoFlags = NIIF_INFO;
+
+            Shell_NotifyIcon(NIM_ADD, &nid);
+
+            Sleep(100);
+
+            Shell_NotifyIcon(NIM_DELETE, &nid);
+            CloseWindow(hwnd);
+            DestroyWindow(hwnd);
+        #elif defined(OS_MACOS)
+            toastMessageMacos(title.c_str(), message.c_str());
+        #elif defined(OS_LINUX)
+            if (std::system(fmt::format(R"(notify-send -i "net.werwolv.ImHex" "{}" "{}")", title, message).c_str()) != 0) {
+                std::ignore = std::system(fmt::format(R"(zenity --info --title="{}" --text="{}")", title, message).c_str());
+            }
+        #elif defined(OS_WEB)
+            EM_ASM({
+                try {
+                    const t = UTF8ToString($0);
+                    const m = UTF8ToString($1);
+
+                    if (Notification.permission === "granted") {
+                        new Notification(t, { body: m });
+                    } else if (Notification.permission !== "denied") {
+                        Notification.requestPermission().then(function(p) {
+                            if (p === "granted") {
+                                new Notification(t, { body: m });
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.error(e);
+                }
+            }, title.c_str(), message.c_str());
+        #endif
     }
 
 }

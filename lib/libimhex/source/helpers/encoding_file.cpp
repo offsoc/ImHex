@@ -2,6 +2,7 @@
 
 #include <hex/helpers/utils.hpp>
 
+#include <ranges>
 #include <wolv/io/file.hpp>
 #include <wolv/utils/string.hpp>
 
@@ -65,6 +66,9 @@ namespace hex {
 
 
     EncodingFile &EncodingFile::operator=(const hex::EncodingFile &other) {
+        if(this == &other) {
+            return *this;
+        }
         m_mapping = std::make_unique<std::map<size_t, std::map<std::vector<u8>, std::string>>>(*other.m_mapping);
         m_tableContent = other.m_tableContent;
         m_longestSequence = other.m_longestSequence;
@@ -88,10 +92,8 @@ namespace hex {
 
 
 
-    std::pair<std::string_view, size_t> EncodingFile::getEncodingFor(std::span<u8> buffer) const {
-        for (auto riter = m_mapping->crbegin(); riter != m_mapping->crend(); ++riter) {
-            const auto &[size, mapping] = *riter;
-
+    std::pair<std::string_view, size_t> EncodingFile::getEncodingFor(std::span<const u8> buffer) const {
+        for (const auto &[size, mapping] : std::ranges::reverse_view(*m_mapping)) {
             if (size > buffer.size()) continue;
 
             std::vector key(buffer.begin(), buffer.begin() + size);
@@ -103,9 +105,7 @@ namespace hex {
     }
 
     u64 EncodingFile::getEncodingLengthFor(std::span<u8> buffer) const {
-        for (auto riter = m_mapping->crbegin(); riter != m_mapping->crend(); ++riter) {
-            const auto &[size, mapping] = *riter;
-
+        for (const auto& [size, mapping] : std::ranges::reverse_view(*m_mapping)) {
             if (size > buffer.size()) continue;
 
             std::vector key(buffer.begin(), buffer.begin() + size);
@@ -116,9 +116,22 @@ namespace hex {
         return 1;
     }
 
+    std::string EncodingFile::decodeAll(std::span<const u8> buffer) const {
+        std::string result;
+
+        while (!buffer.empty()) {
+            const auto [character, size] = getEncodingFor(buffer);
+            result += character;
+            buffer = buffer.subspan(size);
+        }
+
+        return result;
+    }
+
+
     void EncodingFile::parse(const std::string &content) {
         m_tableContent = content;
-        for (const auto &line : splitString(m_tableContent, "\n")) {
+        for (const auto &line : wolv::util::splitString(m_tableContent, "\n")) {
 
             std::string from, to;
             {

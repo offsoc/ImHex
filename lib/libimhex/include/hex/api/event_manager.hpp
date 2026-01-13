@@ -9,7 +9,6 @@
 #include <map>
 #include <string_view>
 
-#include <hex/api/imhex_api.hpp>
 #include <hex/helpers/logger.hpp>
 
 #include <wolv/types/type_name.hpp>
@@ -90,13 +89,17 @@ EXPORT_MODULE namespace hex {
             explicit Event(Callback func) noexcept : m_func(std::move(func)) { }
 
             template<typename E>
-            void call(Params... params) const {
-                try {
-                    m_func(params...);
-                } catch (const std::exception &e) {
-                    log::error("An exception occurred while handling event {}: {}", wolv::type::getTypeName<E>(), e.what());
-                    throw;
-                }
+            void call(auto&& ... params) const {
+                #if defined(DEBUG)
+                    m_func(std::forward<decltype(params)>(params)...);
+                #else
+                    try {
+                        m_func(std::forward<decltype(params)>(params)...);
+                    } catch (const std::exception &e) {
+                        log::error("An exception occurred while handling event {}: {}", wolv::type::getTypeName<E>(), e.what());
+                        throw;
+                    }
+                #endif
             }
 
         private:
@@ -125,8 +128,8 @@ EXPORT_MODULE namespace hex {
          * @return Token to unsubscribe from the event
          */
         template<impl::EventType E>
-        static EventList::iterator subscribe(typename E::Callback function) {
-            std::scoped_lock lock(getEventMutex());
+        static EventList::iterator subscribe(E::Callback function) {
+            std::lock_guard lock(getEventMutex());
 
             auto &events = getEvents();
             return events.insert({ E::Id, std::make_unique<E>(function) });
@@ -139,15 +142,15 @@ EXPORT_MODULE namespace hex {
          * @param function Function to call when the event is posted
          */
         template<impl::EventType E>
-        static void subscribe(void *token, typename E::Callback function) {
-            std::scoped_lock lock(getEventMutex());
+        static void subscribe(void *token, E::Callback function) {
+            std::lock_guard lock(getEventMutex());
 
             if (isAlreadyRegistered(token, E::Id)) {
                 log::fatal("The token '{}' has already registered the same event ('{}')", token, wolv::type::getTypeName<E>());
                 return;
             }
 
-            getTokenStore().insert({ token, subscribe<E>(function) });
+            getTokenStore().insert({ token, subscribe<E>(std::move(function)) });
         }
 
         /**
@@ -155,7 +158,7 @@ EXPORT_MODULE namespace hex {
          * @param token Token returned by subscribe
          */
         static void unsubscribe(const EventList::iterator &token) noexcept {
-            std::scoped_lock lock(getEventMutex());
+            std::lock_guard lock(getEventMutex());
 
             getEvents().erase(token);
         }
@@ -167,7 +170,7 @@ EXPORT_MODULE namespace hex {
          */
         template<impl::EventType E>
         static void unsubscribe(void *token) noexcept {
-            std::scoped_lock lock(getEventMutex());
+            std::lock_guard lock(getEventMutex());
 
             unsubscribe(token, E::Id);
         }
@@ -179,9 +182,9 @@ EXPORT_MODULE namespace hex {
          */
         template<impl::EventType E>
         static void post(auto && ...args) {
-            std::scoped_lock lock(getEventMutex());
+            std::lock_guard lock(getEventMutex());
 
-            auto [begin, end] = getEvents().equal_range(E::Id);
+            const auto &[begin, end] = getEvents().equal_range(E::Id);
             for (auto it = begin; it != end; ++it) {
                 const auto &[id, event] = *it;
                 (*static_cast<E *const>(event.get())).template call<E>(std::forward<decltype(args)>(args)...);
@@ -197,7 +200,7 @@ EXPORT_MODULE namespace hex {
          * @brief Unsubscribe all subscribers from all events
          */
         static void clear() noexcept {
-            std::scoped_lock lock(getEventMutex());
+            std::lock_guard lock(getEventMutex());
 
             getEvents().clear();
             getTokenStore().clear();

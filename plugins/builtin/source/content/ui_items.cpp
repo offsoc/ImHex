@@ -1,16 +1,22 @@
-#include <hex/api/content_registry.hpp>
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
+#include <hex/api/content_registry/settings.hpp>
+#include <hex/api/imhex_api/system.hpp>
 #include <hex/api/localization_manager.hpp>
 #include <hex/api/task_manager.hpp>
+#include <hex/api/tutorial_manager.hpp>
+
 #include <hex/api/events/events_provider.hpp>
 #include <hex/api/events/events_gui.hpp>
 #include <hex/api/events/requests_gui.hpp>
+#include <hex/api/events/events_interaction.hpp>
+#include <hex/api/events/requests_interaction.hpp>
 
 #include <hex/ui/view.hpp>
 #include <hex/helpers/utils.hpp>
 #include <hex/helpers/fmt.hpp>
 #include <hex/helpers/logger.hpp>
 #include <hex/helpers/debugging.hpp>
+#include <hex/providers/provider.hpp>
 
 #include <fonts/vscode_icons.hpp>
 #include <imgui.h>
@@ -22,13 +28,14 @@
 #include <toasts/toast_notification.hpp>
 
 #include <csignal>
-#include <hex/api/events/events_interaction.hpp>
+#include <fonts/tabler_icons.hpp>
+#include <hex/api/content_registry/communication_interface.hpp>
 
 namespace hex::plugin::builtin {
 
     void addTitleBarButtons() {
         if (dbg::debugModeEnabled()) {
-            ContentRegistry::Interface::addTitleBarButton(ICON_VS_DEBUG, "hex.builtin.title_bar_button.debug_build", []{
+            ContentRegistry::UserInterface::addTitleBarButton(ICON_VS_DEBUG, ImGuiCustomCol_ToolbarGray, "hex.builtin.title_bar_button.debug_build", []{
                 if (ImGui::GetIO().KeyShift) {
                     RequestOpenPopup::post("DebugMenu");
                 } else {
@@ -37,17 +44,20 @@ namespace hex::plugin::builtin {
             });
         }
 
-        ContentRegistry::Interface::addTitleBarButton(ICON_VS_SMILEY, "hex.builtin.title_bar_button.feedback", []{
+        ContentRegistry::UserInterface::addTitleBarButton(ICON_VS_SMILEY, ImGuiCustomCol_ToolbarGray, "hex.builtin.title_bar_button.feedback", []{
             hex::openWebpage("https://github.com/WerWolv/ImHex/discussions/categories/feedback");
         });
 
+        ContentRegistry::UserInterface::addTitleBarButton(ICON_TA_HELP, ImGuiCustomCol_ToolbarGray, "hex.builtin.title_bar_button.interactive_help", []{
+            TutorialManager::startHelpHover();
+        });
     }
 
     static void drawGlobalPopups() {
         // Task exception toast
         for (const auto &task : TaskManager::getRunningTasks()) {
             if (task->hadException()) {
-                ui::ToastError::open(hex::format("hex.builtin.popup.error.task_exception"_lang, Lang(task->getUnlocalizedName()), task->getExceptionMessage()));
+                ui::ToastError::open(fmt::format("hex.builtin.popup.error.task_exception"_lang, Lang(task->getUnlocalizedName()), task->getExceptionMessage()));
                 task->clearException();
                 break;
             }
@@ -56,6 +66,7 @@ namespace hex::plugin::builtin {
         ImGui::SetNextWindowSize(scaled({ 300, 200 }), ImGuiCond_Always);
         ImGui::SetNextWindowPos(ImHexApi::System::getMainWindowPosition() + ImHexApi::System::getMainWindowSize() / 2, ImGuiCond_Always, ImVec2(0.5F, 0.5F));
         if (ImGui::BeginPopupModal("hex.builtin.popup.foreground_task.title"_lang, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+            ImHexApi::System::unlockFrameRate();
             for (const auto &task : TaskManager::getRunningTasks()) {
                 if (task->isBlocking()) {
                     ImGui::NewLine();
@@ -88,6 +99,7 @@ namespace hex::plugin::builtin {
         static bool showImGuiDemo = false;
         static bool showImPlotDemo = false;
         static bool showImPlot3DDemo = false;
+        static bool showTestEngine = false;
 
         ImGui::SetNextWindowSize(scaled({ 300, 150 }), ImGuiCond_Always);
         if (ImGui::BeginPopup("DebugMenu")) {
@@ -109,6 +121,7 @@ namespace hex::plugin::builtin {
                     if (ImGui::BeginChild("Scrolling", ImGui::GetContentRegionAvail())) {
                         auto ctx = ImGui::GetCurrentContext();
                         ImGui::Checkbox("Show ImGui Demo", &showImGuiDemo);
+                        ImGui::Checkbox("Show ImGui Test Engine",&showTestEngine);
                         ImGui::Checkbox("Show ImPlot Demo", &showImPlotDemo);
                         ImGui::Checkbox("Show ImPlot3D Demo", &showImPlot3DDemo);
 
@@ -158,6 +171,7 @@ namespace hex::plugin::builtin {
 
         if (showImGuiDemo)
             ImGui::ShowDemoWindow(&showImGuiDemo);
+        ImGuiExt::ImGuiTestEngine::setEnabled(showTestEngine);
         if (showImPlotDemo)
             ImPlot::ShowDemoWindow(&showImPlotDemo);
         if (showImPlot3DDemo)
@@ -219,15 +233,63 @@ namespace hex::plugin::builtin {
 
     void addFooterItems() {
         if (hex::isProcessElevated()) {
-            ContentRegistry::Interface::addFooterItem([] {
+            ContentRegistry::UserInterface::addFooterItem([] {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGuiExt::GetCustomColorU32(ImGuiCustomCol_Highlight));
                 ImGui::TextUnformatted(ICON_VS_SHIELD);
                 ImGui::PopStyleColor();
             });
         }
 
+        ContentRegistry::UserInterface::addFooterItem([] {
+            if (ContentRegistry::MCP::isEnabled()) {
+                const bool connected = ContentRegistry::MCP::isConnected();
+                if (connected) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGuiExt::GetCustomColorU32(ImGuiCustomCol_Highlight));
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+                }
+                ImGui::TextUnformatted(ICON_VS_MCP);
+
+                ImGui::PopStyleColor();
+
+                if (ImGui::IsItemHovered()) {
+                    if (ImGui::BeginTooltip()) {
+                        if (connected) {
+                            auto &clientInfo = ContentRegistry::MCP::impl::getMcpServerInstance()->getClientInfo();
+                            ImGuiExt::TextFormattedColored(ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_Highlight), "hex.builtin.footer.mcp.connected_to"_lang, clientInfo.name);
+                            ImGui::Separator();
+                            if (ImGui::BeginTable("##connection_info", 2, ImGuiTableFlags_RowBg)) {
+                                ImGui::TableSetupColumn("##property", ImGuiTableColumnFlags_WidthStretch);
+                                ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
+
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGuiExt::TextFormatted("hex.builtin.footer.mcp.client_version"_lang);
+                                ImGui::TableNextColumn();
+                                ImGuiExt::TextFormatted("{}", clientInfo.version);
+
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGuiExt::TextFormatted("hex.builtin.footer.mcp.protocol_version"_lang);
+                                ImGui::TableNextColumn();
+                                ImGuiExt::TextFormatted("{}", clientInfo.protocolVersion);
+
+                                ImGui::EndTable();
+                            }
+                        } else {
+                            ImGui::PushTextWrapPos(200_scaled);
+                            ImGuiExt::TextFormattedWrapped("hex.builtin.footer.mcp.not_connected"_lang);
+                            ImGui::PopTextWrapPos();
+                        }
+
+                        ImGui::EndTooltip();
+                    }
+                }
+            }
+        });
+
         if (dbg::debugModeEnabled()) {
-            ContentRegistry::Interface::addFooterItem([] {
+            ContentRegistry::UserInterface::addFooterItem([] {
                 static float framerate = 0;
                 if (ImGuiExt::HasSecondPassed()) {
                     framerate = 1.0F / ImGui::GetIO().DeltaTime;
@@ -269,7 +331,7 @@ namespace hex::plugin::builtin {
             });
         }
 
-        ContentRegistry::Interface::addFooterItem([] {
+        ContentRegistry::UserInterface::addFooterItem([] {
             static bool shouldResetProgress = false;
 
             auto taskCount = TaskManager::getRunningTaskCount();
@@ -280,13 +342,16 @@ namespace hex::plugin::builtin {
                 if (frontTask == nullptr)
                     return;
 
+                ImHexApi::System::unlockFrameRate();
+
                 const auto progress = frontTask->getMaxValue() == 0 ? -1 : float(frontTask->getValue()) / float(frontTask->getMaxValue());
 
-                ImHexApi::System::setTaskBarProgress(ImHexApi::System::TaskProgressState::Progress, ImHexApi::System::TaskProgressType::Normal, u32(progress * 100));
+                if (progress >= 0)
+                    ImHexApi::System::setTaskBarProgress(ImHexApi::System::TaskProgressState::Progress, ImHexApi::System::TaskProgressType::Normal, u32(progress * 100));
 
                 const auto widgetStart = ImGui::GetCursorPos();
                 {
-                    ImGuiExt::TextSpinner(hex::format("({})", taskCount).c_str());
+                    ImGuiExt::TextSpinner(fmt::format("({})", taskCount).c_str());
                     ImGui::SameLine();
                     ImGuiExt::ProgressBar(progress, scaled({ 100, 5 }), (ImGui::GetCurrentWindowRead()->MenuBarHeight - 10_scaled) / 2.0);
                     ImGui::SameLine();
@@ -301,9 +366,9 @@ namespace hex::plugin::builtin {
                 if (progress < 0)
                     progressString = "";
                 else
-                    progressString = hex::format("[ {}/{} ({:.1f}%) ] ", frontTask->getValue(), frontTask->getMaxValue(), std::min(progress, 1.0F) * 100.0F);
+                    progressString = fmt::format("[ {}/{} ({:.1f}%) ] ", frontTask->getValue(), frontTask->getMaxValue(), std::min(progress, 1.0F) * 100.0F);
 
-                ImGuiExt::InfoTooltip(hex::format("{}{}", progressString, Lang(frontTask->getUnlocalizedName())).c_str());
+                ImGuiExt::InfoTooltip(fmt::format("{}{}", progressString, Lang(frontTask->getUnlocalizedName())).c_str());
 
                 if (ImGui::BeginPopupContextItem("RestTasks", ImGuiPopupFlags_MouseButtonLeft)) {
                     for (const auto &task : tasks) {
@@ -350,9 +415,11 @@ namespace hex::plugin::builtin {
     }
 
     static void drawProviderContextMenu(prv::Provider *provider) {
-        for (const auto &menuEntry : provider->getMenuEntries()) {
-            if (ImGui::MenuItemEx(menuEntry.name.c_str(), menuEntry.icon)) {
-                menuEntry.callback();
+        if (auto *menuItemProvider = dynamic_cast<prv::IProviderMenuItems*>(provider); menuItemProvider != nullptr) {
+            for (const auto &menuEntry : menuItemProvider->getMenuEntries()) {
+                if (ImGui::MenuItemEx(menuEntry.name.c_str(), menuEntry.icon)) {
+                    menuEntry.callback();
+                }
             }
         }
     }
@@ -363,28 +430,30 @@ namespace hex::plugin::builtin {
 
             ImGuiExt::TextFormatted("{}", provider->getName().c_str());
 
-            const auto &description = provider->getDataDescription();
-            if (!description.empty()) {
-                ImGui::Separator();
-                if (ImGui::GetIO().KeyShift && !description.empty()) {
+            if (auto *dataDescriptionProvider = dynamic_cast<const prv::IProviderDataDescription*>(provider); dataDescriptionProvider != nullptr) {
+                const auto &description = dataDescriptionProvider->getDataDescription();
+                if (!description.empty()) {
+                    ImGui::Separator();
+                    if (ImGui::GetIO().KeyShift && !description.empty()) {
 
-                    if (ImGui::BeginTable("information", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoKeepColumnsVisible, ImVec2(400_scaled, 0))) {
-                        ImGui::TableSetupColumn("type");
-                        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+                        if (ImGui::BeginTable("information", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoKeepColumnsVisible, ImVec2(400_scaled, 0))) {
+                            ImGui::TableSetupColumn("type");
+                            ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
 
-                        ImGui::TableNextRow();
+                            ImGui::TableNextRow();
 
-                        for (auto &[name, value] : description) {
-                            ImGui::TableNextColumn();
-                            ImGuiExt::TextFormatted("{}", name);
-                            ImGui::TableNextColumn();
-                            ImGuiExt::TextFormattedWrapped("{}", value);
+                            for (auto &[name, value] : description) {
+                                ImGui::TableNextColumn();
+                                ImGuiExt::TextFormatted("{}", name);
+                                ImGui::TableNextColumn();
+                                ImGuiExt::TextFormattedWrapped("{}", value);
+                            }
+
+                            ImGui::EndTable();
                         }
-
-                        ImGui::EndTable();
+                    } else {
+                        ImGuiExt::TextFormattedDisabled("hex.builtin.provider.tooltip.show_more"_lang);
                     }
-                } else {
-                    ImGuiExt::TextFormattedDisabled("hex.builtin.provider.tooltip.show_more"_lang);
                 }
             }
 
@@ -412,18 +481,24 @@ namespace hex::plugin::builtin {
         EventProviderChanged::subscribe([](auto, auto) { providerJustChanged = true; });
 
         static prv::Provider *rightClickedProvider = nullptr;
-        EventSearchBoxClicked::subscribe([](ImGuiMouseButton button){
-            if (button == ImGuiMouseButton_Right) {
+        EventSearchBoxClicked::subscribe([](ImGuiMouseButton button) {
+            if (button == ImGuiMouseButton_Left) {
+                RequestOpenCommandPalette::post();
+            } else if (button == ImGuiMouseButton_Right) {
                 rightClickedProvider = ImHexApi::Provider::get();
                 RequestOpenPopup::post("ProviderMenu");
             }
         });
 
         EventFrameBegin::subscribe([] {
-            if (rightClickedProvider != nullptr && !rightClickedProvider->getMenuEntries().empty()) {
-                if (ImGui::BeginPopup("ProviderMenu")) {
-                    drawProviderContextMenu(rightClickedProvider);
-                    ImGui::EndPopup();
+            if (rightClickedProvider != nullptr) {
+                if (auto *menuItemProvider = dynamic_cast<prv::IProviderMenuItems*>(rightClickedProvider); menuItemProvider != nullptr) {
+                    if (!menuItemProvider->getMenuEntries().empty()) {
+                        if (ImGui::BeginPopup("ProviderMenu")) {
+                            drawProviderContextMenu(rightClickedProvider);
+                            ImGui::EndPopup();
+                        }
+                    }
                 }
             }
         });
@@ -432,17 +507,25 @@ namespace hex::plugin::builtin {
             rightClickedProvider = nullptr;
         });
 
-        static bool alwaysShowProviderTabs = false;
-        ContentRegistry::Settings::onChange("hex.builtin.setting.interface", "hex.builtin.setting.interface.always_show_provider_tabs", [](const ContentRegistry::Settings::SettingsValue &value) {
-            alwaysShowProviderTabs = value.get<bool>(false);
-        });
+        static ContentRegistry::Settings::SettingsVariable<bool, "hex.builtin.setting.interface", "hex.builtin.setting.interface.always_show_provider_tabs"> alwaysShowProviderTabs = false;
 
         // Toolbar items
-        ContentRegistry::Interface::addToolbarItem([] {
+        ContentRegistry::UserInterface::addToolbarItem([] {
 
-            for (const auto &menuItem : ContentRegistry::Interface::impl::getToolbarMenuItems()) {
+            for (const auto &menuItem : ContentRegistry::UserInterface::impl::getToolbarMenuItems()) {
+                // Remove invalid toolbar items from the toolbar
+                if (menuItem == nullptr)
+                    continue;
+                if (menuItem->unlocalizedNames.empty() || menuItem->icon.glyph.empty()) {
+                    menuItem->toolbarIndex = -1;
+                    continue;
+                }
+
+                ImGui::PushID(menuItem);
+                ON_SCOPE_EXIT { ImGui::PopID(); };
+
                 const auto &unlocalizedItemName = menuItem->unlocalizedNames.back();
-                if (unlocalizedItemName.get() == ContentRegistry::Interface::impl::SeparatorValue) {
+                if (unlocalizedItemName.get() == ContentRegistry::UserInterface::impl::SeparatorValue) {
                     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
                     continue;
                 }
@@ -458,7 +541,7 @@ namespace hex::plugin::builtin {
         });
 
         // Provider switcher
-        ContentRegistry::Interface::addToolbarItem([] {
+        ContentRegistry::UserInterface::addToolbarItem([] {
             const bool providerValid = ImHexApi::Provider::get() != nullptr;
             const bool tasksRunning  = TaskManager::getRunningTaskCount() > 0;
 
@@ -498,18 +581,17 @@ namespace hex::plugin::builtin {
                             flags |= ImGuiTabItemFlags_UnsavedDocument;
                         if (i64(i) == selectedProviderIndex && providerJustChanged) {
                             flags |= ImGuiTabItemFlags_SetSelected;
-                            providerJustChanged = false;
                         }
 
                         static size_t lastSelectedProvider = 0;
 
                         bool isSelected = false;
-                        if (ImGui::BeginTabItem(tabProvider->getName().c_str(), &open, flags)) {
+                        if (ImGui::BeginTabItem(fmt::format("{} {}", tabProvider->getIcon(), tabProvider->getName()).c_str(), &open, flags)) {
                             isSelected = true;
                             ImGui::EndTabItem();
                         }
 
-                        if (isSelected && lastSelectedProvider != i) {
+                        if (isSelected && lastSelectedProvider != i && !providerJustChanged) {
                             ImHexApi::Provider::setCurrentProvider(i);
                             lastSelectedProvider = i;
                         }
@@ -529,28 +611,21 @@ namespace hex::plugin::builtin {
                         }
                     }
                     ImGui::EndTabBar();
+
+                    providerJustChanged = false;
                 }
             }
             ImGui::EndDisabled();
         });
 
         EventImHexStartupFinished::subscribe([] {
-            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.undo", ImGuiCustomCol_ToolbarBlue);
-            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.redo", ImGuiCustomCol_ToolbarBlue);
-            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.file.create_file", ImGuiCustomCol_ToolbarGray);
-            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.file.open_file", ImGuiCustomCol_ToolbarBrown);
-            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.view.hex_editor.menu.file.save", ImGuiCustomCol_ToolbarBlue);
-            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.view.hex_editor.menu.file.save_as", ImGuiCustomCol_ToolbarBlue);
-            ContentRegistry::Interface::addMenuItemToToolbar("hex.builtin.menu.edit.bookmark.create", ImGuiCustomCol_ToolbarGreen);
-
-            const auto &initArgs = ImHexApi::System::getInitArguments();
-            if (auto it = initArgs.find("update-available"); it != initArgs.end()) {
-                ContentRegistry::Interface::addTitleBarButton(ICON_VS_GIFT, "hex.builtin.welcome.update.title", [] {
-                    ImHexApi::System::updateImHex(ImHexApi::System::UpdateType::Stable);
-                });
-
-                ui::ToastInfo::open(hex::format("hex.builtin.welcome.update.desc"_lang, it->second));
-            }
+            ContentRegistry::UserInterface::addMenuItemToToolbar({ "hex.builtin.menu.edit", "hex.builtin.view.hex_editor.menu.edit.undo" }, ImGuiCustomCol_ToolbarBlue);
+            ContentRegistry::UserInterface::addMenuItemToToolbar({ "hex.builtin.menu.edit", "hex.builtin.view.hex_editor.menu.edit.redo" }, ImGuiCustomCol_ToolbarBlue);
+            ContentRegistry::UserInterface::addMenuItemToToolbar({ "hex.builtin.menu.file", "hex.builtin.menu.file.create_file" }, ImGuiCustomCol_ToolbarGray);
+            ContentRegistry::UserInterface::addMenuItemToToolbar({ "hex.builtin.menu.file", "hex.builtin.menu.file.open_file" }, ImGuiCustomCol_ToolbarBrown);
+            ContentRegistry::UserInterface::addMenuItemToToolbar({ "hex.builtin.menu.file", "hex.builtin.view.hex_editor.menu.file.save" }, ImGuiCustomCol_ToolbarBlue);
+            ContentRegistry::UserInterface::addMenuItemToToolbar({ "hex.builtin.menu.file", "hex.builtin.view.hex_editor.menu.file.save_as" }, ImGuiCustomCol_ToolbarBlue);
+            ContentRegistry::UserInterface::addMenuItemToToolbar({ "hex.builtin.menu.edit", "hex.builtin.menu.edit.bookmark.create" }, ImGuiCustomCol_ToolbarGreen);
         });
     }
 

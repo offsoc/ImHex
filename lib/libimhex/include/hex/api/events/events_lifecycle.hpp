@@ -1,6 +1,7 @@
 #pragma once
 
 #include <hex/api/event_manager.hpp>
+#include <hex/helpers/semantic_version.hpp>
 
 struct ImGuiTestEngine;
 
@@ -11,6 +12,13 @@ namespace hex {
      * @brief Called when Imhex finished startup, and will enter the main window rendering loop
      */
     EVENT_DEF(EventImHexStartupFinished);
+
+    /**
+     * @brief Called when the user presses the close button on the main window
+     *
+     * This is currently only used and implemented on macOS
+     */
+    EVENT_DEF(EventCloseButtonPressed);
 
     /**
      * @brief Called when ImHex is closing, to trigger the last shutdown hooks
@@ -70,6 +78,11 @@ namespace hex {
      * @brief Called when a project has been loaded
      */
     EVENT_DEF(EventProjectOpened);
+
+    /**
+     * @brief Called when a project is saved/saved as
+     */
+    EVENT_DEF(EventProjectSaved);
 
     /**
      * @brief Called when a native message was received from another ImHex instance

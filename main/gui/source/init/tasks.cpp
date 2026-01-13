@@ -9,7 +9,7 @@
 #include <hex/helpers/logger.hpp>
 #include <hex/helpers/default_paths.hpp>
 
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/settings.hpp>
 #include <hex/api/plugin_manager.hpp>
 #include <hex/api/achievement_manager.hpp>
 
@@ -20,6 +20,7 @@
 
 #include <wolv/io/fs.hpp>
 #include <wolv/io/file.hpp>
+#include <wolv/utils/string.hpp>
 
 namespace hex::init {
 
@@ -76,7 +77,6 @@ namespace hex::init {
         if (ImGui::GetCurrentContext() != nullptr) {
             if (ImGui::GetIO().Fonts != nullptr) {
                 ImGui::GetIO().Fonts->Locked = false;
-                ImGui::GetIO().Fonts = nullptr;
             }
         }
 
@@ -132,17 +132,18 @@ namespace hex::init {
         const auto shouldLoadPlugin = [executablePath = wolv::io::fs::getExecutablePath()](const Plugin &plugin) {
             // In debug builds, ignore all plugins that are not part of the executable directory
             #if !defined(DEBUG)
+                std::ignore = plugin;
                 return true;
+			#else
+	            if (!executablePath.has_value())
+	                return true;
+
+	            if (!PluginManager::getPluginLoadPaths().empty())
+	                return true;
+
+	            // Check if the plugin is somewhere in the same directory tree as the executable
+	            return !std::fs::relative(plugin.getPath(), executablePath->parent_path()).string().starts_with("..");
             #endif
-
-            if (!executablePath.has_value())
-                return true;
-
-            if (!PluginManager::getPluginLoadPaths().empty())
-                return true;
-
-            // Check if the plugin is somewhere in the same directory tree as the executable
-            return !std::fs::relative(plugin.getPath(), executablePath->parent_path()).string().starts_with("..");
         };
 
         u32 loadErrors = 0;
@@ -203,22 +204,33 @@ namespace hex::init {
         auto keepNewest = [&](u32 count, const paths::impl::DefaultPath &pathType) {
             for (const auto &path : pathType.write()) {
                 try {
+                    const auto canonicalPath = std::filesystem::canonical(path);        
                     std::vector<std::filesystem::directory_entry> files;
 
-                    for (const auto& file : std::filesystem::directory_iterator(path))
-                        files.push_back(file);
+                    for (const auto &file : std::filesystem::directory_iterator(canonicalPath)){
+                           // Skip symlinks and directories
+                        if (!file.is_regular_file()) 
+                            continue;
+
+                        if (std::filesystem::canonical(file.path()).native().starts_with(canonicalPath.native()))
+                            files.push_back(file);
+                        else
+                            log::warn("Skip file outside directory {}", file.path().string());
+                    }
 
                     if (files.size() <= count)
                         return;
 
-                    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
+                    std::ranges::sort(files, [](const auto& a, const auto& b) {
                         return std::filesystem::last_write_time(a) > std::filesystem::last_write_time(b);
                     });
 
-                    for (auto it = files.begin() + count; it != files.end(); it += 1)
-                        std::filesystem::remove(it->path());
+                    for (auto it = files.begin() + count; it != files.end(); ++it){
+                        if (it->is_regular_file()) 
+                            std::filesystem::remove(it->path());
+                    }
                 } catch (std::filesystem::filesystem_error &e) {
-                    log::error("Failed to clear old file! {}", e.what());
+                    log::error("Failed to clear old file in directory '{}'! {}", wolv::util::toUTF8String(path), e.what());
                     result = false;
                 }
             }
@@ -226,6 +238,16 @@ namespace hex::init {
 
         keepNewest(10, paths::Logs);
         keepNewest(25, paths::Backups);
+
+        // Remove all old update files
+        for (const auto &path : paths::Updates.all()) {
+            if (!wolv::io::fs::exists(path))
+                continue;
+
+            for (const auto &entry : std::filesystem::directory_iterator(path)) {
+                wolv::io::fs::removeAll(entry.path());
+            }
+        }
 
         return result;
     }
@@ -252,8 +274,12 @@ namespace hex::init {
     // Run all exit tasks, and print to console
     void runExitTasks() {
         for (const auto &[name, task, async, running] : init::getExitTasks()) {
-            const bool result = task();
-            log::info("Exit task '{0}' finished {1}", name, result ? "successfully" : "unsuccessfully");
+            try {
+                const bool result = task();
+                log::info("Exit task '{0}' finished {1}", name, result ? "successfully" : "unsuccessfully");
+            } catch (const std::exception &e) {
+                log::error("Exit task '{}' failed with exception: {}", name, e.what());
+            }
         }
     }
 

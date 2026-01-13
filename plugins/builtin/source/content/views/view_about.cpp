@@ -2,7 +2,7 @@
 #include "hex/ui/popup.hpp"
 
 #include <hex/api_urls.hpp>
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
 #include <hex/api/achievement_manager.hpp>
 #include <hex/api/plugin_manager.hpp>
 
@@ -11,16 +11,16 @@
 #include <hex/helpers/utils.hpp>
 #include <hex/helpers/http_requests.hpp>
 #include <hex/helpers/default_paths.hpp>
-
-#include <content/popups/popup_docs_question.hpp>
+#include <hex/helpers/menu_items.hpp>
 
 #include <fonts/vscode_icons.hpp>
 
 #include <romfs/romfs.hpp>
 #include <wolv/utils/string.hpp>
+#include <nlohmann/json.hpp>
 
 #include <string>
-#include <hex/helpers/menu_items.hpp>
+#include <ui/markdown.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -31,6 +31,8 @@ namespace hex::plugin::builtin {
         }
 
         void drawContent() override {
+            ImHexApi::System::unlockFrameRate();
+
             ImGuiIO& io = ImGui::GetIO();
             ImVec2 size = scaled({ 320, 180 });
             ImGui::InvisibleButton("canvas", size);
@@ -78,15 +80,15 @@ namespace hex::plugin::builtin {
         }
     };
 
-    ViewAbout::ViewAbout() : View::Modal("hex.builtin.view.help.about.name") {
+    ViewAbout::ViewAbout() : View::Modal("hex.builtin.view.help.about.name", ICON_VS_HEART) {
         // Add "About" menu item to the help menu
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.help", "hex.builtin.view.help.about.name" }, ICON_VS_INFO, 1000, Shortcut::None, [this] {
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.help", "hex.builtin.view.help.about.name" }, ICON_VS_INFO, 1000, Shortcut::None, [this] {
             this->getWindowOpenState() = true;
         });
 
-        ContentRegistry::Interface::addMenuItemSeparator({ "hex.builtin.menu.help" }, 2000);
+        ContentRegistry::UserInterface::addMenuItemSeparator({ "hex.builtin.menu.help" }, 2000);
 
-        ContentRegistry::Interface::addMenuItemSubMenu({ "hex.builtin.menu.help" }, 3000, [] {
+        ContentRegistry::UserInterface::addMenuItemSubMenu({ "hex.builtin.menu.help" }, 3000, [] {
             if (menu::isNativeMenuBarUsed())
                 return;
 
@@ -100,11 +102,11 @@ namespace hex::plugin::builtin {
             ImGui::PopStyleVar();
         });
 
-        ContentRegistry::Interface::addMenuItemSeparator({ "hex.builtin.menu.help" }, 4000);
+        ContentRegistry::UserInterface::addMenuItemSeparator({ "hex.builtin.menu.help" }, 4000);
 
 
         // Add documentation link to the help menu
-        ContentRegistry::Interface::addMenuItem({ "hex.builtin.menu.help", "hex.builtin.view.help.documentation" }, ICON_VS_BOOK, 5000, Shortcut::None, [] {
+        ContentRegistry::UserInterface::addMenuItem({ "hex.builtin.menu.help", "hex.builtin.view.help.documentation" }, ICON_VS_BOOK, 5000, Shortcut::None, [] {
             hex::openWebpage("https://docs.werwolv.net/imhex");
             AchievementManager::unlockAchievement("hex.builtin.achievement.starting_out", "hex.builtin.achievement.starting_out.docs.name");
         });
@@ -119,9 +121,9 @@ namespace hex::plugin::builtin {
 
             // Draw the ImHex icon
             if (!m_logoTexture.isValid())
-                m_logoTexture = ImGuiExt::Texture::fromSVG(romfs::get("assets/common/logo.svg").span(), 0, 0, ImGuiExt::Texture::Filter::Linear);
+                m_logoTexture = ImGuiExt::Texture::fromSVG(romfs::get("assets/common/logo.svg").span(), 160_scaled, 160_scaled, ImGuiExt::Texture::Filter::Linear);
 
-            ImGui::Image(m_logoTexture, scaled({ 100, 100 }));
+            ImGui::Image(m_logoTexture, m_logoTexture.getSize());
             if (ImGui::IsItemClicked()) {
                 m_clickCount += 1;
             }
@@ -142,70 +144,76 @@ namespace hex::plugin::builtin {
             ImGui::EndTable();
         }
 
-        // Draw donation links
-        ImGuiExt::Header("hex.builtin.view.help.about.donations"_lang);
-
-        if (ImGui::BeginChild("##ThanksWrapper", ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeightWithSpacing() * 3))) {
-            ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x * 0.8F);
-            ImGuiExt::TextFormattedCentered("{}", static_cast<const char *>("hex.builtin.view.help.about.thanks"_lang));
-            ImGui::PopTextWrapPos();
-        }
-        ImGui::EndChild();
-
         ImGui::NewLine();
 
-        struct DonationPage {
-            DonationPage(const std::fs::path &path, const std::string &link) :
-                texture(ImGuiExt::Texture::fromImage(romfs::get(path).span<std::byte>(), ImGuiExt::Texture::Filter::Linear)),
-                link(std::move(link)) { }
-
-            AutoReset<ImGuiExt::Texture> texture;
-            std::string link;
-        };
-
-        static std::array DonationPages = {
-            DonationPage("assets/common/donation/paypal.png", "https://werwolv.net/donate"),
-            DonationPage("assets/common/donation/github.png", "https://github.com/sponsors/WerWolv"),
-            DonationPage("assets/common/donation/patreon.png", "https://patreon.com/werwolv")
-        };
-
-        if (ImGui::BeginTable("DonationLinks", 5, ImGuiTableFlags_SizingStretchSame)) {
+        if (ImGui::BeginTable("##box", 1, ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchSame, ImGui::GetContentRegionAvail())) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
 
-            for (const auto &page : DonationPages) {
+            // Draw donation links
+            if (ImGui::BeginChild("##ThanksWrapper", ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeightWithSpacing() * 3))) {
+                ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x * 0.8F);
+                ImGuiExt::TextFormattedCentered("{}", static_cast<const char *>("hex.builtin.view.help.about.thanks"_lang));
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::EndChild();
+
+            struct DonationPage {
+                DonationPage(std::string name, const std::fs::path &path, std::string link) :
+                    name(std::move(name)),
+                    texture(ImGuiExt::Texture::fromImage(romfs::get(path).span<std::byte>(), ImGuiExt::Texture::Filter::Linear)),
+                    link(std::move(link)) { }
+
+                std::string name;
+                AutoReset<ImGuiExt::Texture> texture;
+                std::string link;
+            };
+
+            static std::array DonationPages = {
+                DonationPage("GitHub Sponsors", "assets/common/donation/github.png", "https://github.com/sponsors/WerWolv"),
+                DonationPage("Ko-Fi", "assets/common/donation/ko-fi.png", "https://ko-fi.com/werwolv"),
+                DonationPage("PayPal", "assets/common/donation/paypal.png", "https://werwolv.net/donate")
+            };
+
+            if (ImGui::BeginTable("DonationLinks", 5, ImGuiTableFlags_SizingStretchSame)) {
+                ImGui::TableNextRow();
                 ImGui::TableNextColumn();
 
-                const auto size = page.texture->getSize() / 1.5F;
-                const auto startPos = ImGui::GetCursorScreenPos();
-                ImGui::Image(*page.texture, page.texture->getSize() / 1.5F);
+                for (const auto &page : DonationPages) {
+                    ImGui::TableNextColumn();
 
-                if (ImGui::IsItemHovered()) {
-                    ImGui::GetForegroundDrawList()->AddShadowCircle(startPos + size / 2, size.x / 2, ImGui::GetColorU32(ImGuiCol_Button), 100.0F, ImVec2(), ImDrawFlags_ShadowCutOutShapeBackground);
+                    const auto size = (page.texture->getSize() * 1_scaled) / 1.5F;
+                    const auto startPos = ImGui::GetCursorScreenPos();
+                    ImGui::Image(*page.texture, size);
+                    ImGui::SetItemTooltip("%s (%s)", page.name.c_str(), page.link.c_str());
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::GetForegroundDrawList()->AddShadowCircle(startPos + size / 2, size.x / 2, ImGui::GetColorU32(ImGuiCol_Button), 100.0F, ImVec2(), ImDrawFlags_ShadowCutOutShapeBackground);
+                    }
+
+                    if (ImGui::IsItemClicked()) {
+                        hex::openWebpage(page.link);
+                    }
                 }
 
-                if (ImGui::IsItemClicked()) {
-                    hex::openWebpage(page.link);
-                }
+                ImGui::EndTable();
             }
 
+            ImGui::NewLine();
             ImGui::EndTable();
         }
-
-        ImGui::NewLine();
     }
 
     void ViewAbout::drawBuildInformation() {
         if (ImGui::BeginTable("Information", 1, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInner)) {
-            ImGui::Indent();
+            ImGui::Indent(5_scaled);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             {
                 // Draw basic information about ImHex and its version
-                ImGuiExt::TextFormatted("ImHex Hex Editor v{} by WerWolv", ImHexApi::System::getImHexVersion().get());
+                ImGuiExt::TextFormattedSelectable("ImHex Hex Editor v{} by WerWolv", ImHexApi::System::getImHexVersion().get());
                 ImGui::Indent(25_scaled);
-                ImGuiExt::TextFormatted("Powered by Dear ImGui v{}", ImGui::GetVersion());
+                ImGuiExt::TextFormattedSelectable("Powered by Dear ImGui v{}", ImGui::GetVersion());
                 ImGui::Unindent(25_scaled);
             }
 
@@ -216,14 +224,14 @@ namespace hex::plugin::builtin {
                 ImGui::SameLine(0, 0);
 
                 // Draw a clickable link to the current commit
-                if (ImGuiExt::Hyperlink(hex::format("{0}@{1}", ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash()).c_str()))
+                if (ImGuiExt::Hyperlink(fmt::format("{0}@{1}", ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash()).c_str()))
                     hex::openWebpage("https://github.com/WerWolv/ImHex/commit/" + ImHexApi::System::getCommitHash(true));
             }
 
             ImGui::TableNextColumn();
             {
                 // Draw the build date and time
-                ImGuiExt::TextFormatted("Compiled on {} at {}", __DATE__, __TIME__);
+                ImGuiExt::TextFormattedSelectable("Compiled on {} at {}", __DATE__, __TIME__);
             }
 
             ImGui::TableNextColumn();
@@ -240,7 +248,7 @@ namespace hex::plugin::builtin {
                 ImGui::SameLine();
 
                 // Draw a clickable link to the GitHub repository
-                if (ImGuiExt::Hyperlink(ICON_VS_LOGO_GITHUB " " "WerWolv/ImHex"))
+                if (ImGuiExt::Hyperlink(ICON_VS_GITHUB " " "WerWolv/ImHex"))
                     hex::openWebpage("https://github.com/WerWolv/ImHex");
             }
 
@@ -288,21 +296,21 @@ namespace hex::plugin::builtin {
         };
 
         constexpr static std::array Contributors = {
-            Contributor { "iTrooz", "A huge amount of help maintaining ImHex and the CI", "https://github.com/iTrooz", true },
-            Contributor { "jumanji144", "A ton of help with the Pattern Language, API and usage stats", "https://github.com/jumanji144", true },
-            Contributor { "AxCut", "A ton of great pattern language improvements and help with the issue tracker", "https://github.com/paxcut", false },
-            Contributor { "Mary", "Porting ImHex to macOS originally", "https://github.com/marysaka", false },
-            Contributor { "Roblabla", "Adding the MSI Windows installer", "https://github.com/roblabla", false },
-            Contributor { "jam1garner", "Adding support for Rust plugins", "https://github.com/jam1garner", false },
-            Contributor { "All other amazing contributors", "Being part of the community, opening issues, PRs and donating", "https://github.com/WerWolv/ImHex/graphs/contributors", false }
+            Contributor { .name="iTrooz", .description="A huge amount of help maintaining ImHex and the CI", .link="https://github.com/iTrooz", .mainContributor=true },
+            Contributor { .name="jumanji144", .description="A ton of help with the Pattern Language, API and usage stats", .link="https://github.com/jumanji144", .mainContributor=true },
+            Contributor { .name="AxCut", .description="A ton of great pattern language improvements and help with the issue tracker", .link="https://github.com/paxcut", .mainContributor=true },
+            Contributor { .name="Mary", .description="Porting ImHex to macOS originally", .link="https://github.com/marysaka", .mainContributor=false },
+            Contributor { .name="Roblabla", .description="Adding the MSI Windows installer", .link="https://github.com/roblabla", .mainContributor=false },
+            Contributor { .name="jam1garner", .description="Adding support for Rust plugins", .link="https://github.com/jam1garner", .mainContributor=false },
+            Contributor { .name="All other amazing contributors", .description="Being part of the community, opening issues, PRs and donating", .link="https://github.com/WerWolv/ImHex/graphs/contributors", .mainContributor=false }
         };
 
         constexpr static std::array Testers = {
-            Contributor { "Nemoumbra", "Breaking my code literal seconds after I push it", "https://github.com/Nemoumbra", true },
-            Contributor { "Berylskid", "", "https://github.com/Berylskid", false },
-            Contributor { "Jan Polak", "", "https://github.com/polak-jan", false },
-            Contributor { "Ken-Kaneki", "", "https://github.com/loneicewolf", false },
-            Contributor { "Everybody who has reported issues", "Helping me find bugs and improve the software", "https://github.com/WerWolv/ImHex/issues", false }
+            Contributor { .name="Nemoumbra", .description="Breaking my code literal seconds after I push it", .link="https://github.com/Nemoumbra", .mainContributor=true },
+            Contributor { .name="Berylskid", .description="", .link="https://github.com/Berylskid", .mainContributor=false },
+            Contributor { .name="Jan Polak", .description="", .link="https://github.com/polak-jan", .mainContributor=false },
+            Contributor { .name="Ken-Kaneki", .description="", .link="https://github.com/loneicewolf", .mainContributor=false },
+            Contributor { .name="Everybody who has reported issues", .description="Helping me find bugs and improve the software", .link="https://github.com/WerWolv/ImHex/issues", .mainContributor=false }
 
         };
 
@@ -317,43 +325,59 @@ namespace hex::plugin::builtin {
     }
 
     void ViewAbout::drawLibraryCreditsPage() {
-        struct Library {
+        struct ExternalResource {
             const char *name;
             const char *author;
             const char *link;
         };
 
         constexpr static std::array ImGuiLibraries = {
-            Library { "ImGui", "ocornut", "https://github.com/ocornut/imgui" },
-            Library { "ImPlot", "epezent", "https://github.com/epezent/implot" },
-            Library { "imnodes", "Nelarius", "https://github.com/Nelarius/imnodes" },
-            Library { "ImGuiColorTextEdit", "BalazsJako", "https://github.com/BalazsJako/ImGuiColorTextEdit" },
+            ExternalResource { .name="ImGui", .author="ocornut", .link="https://github.com/ocornut/imgui" },
+            ExternalResource { .name="ImPlot", .author="epezent", .link="https://github.com/epezent/implot" },
+            ExternalResource { .name="ImPlot3D", .author="brenocq", .link="https://github.com/brenocq/implot3d" },
+            ExternalResource { .name="imnodes", .author="Nelarius", .link="https://github.com/Nelarius/imnodes" },
+            ExternalResource { .name="ImGuiColorTextEdit", .author="BalazsJako", .link="https://github.com/BalazsJako/ImGuiColorTextEdit" },
         };
 
         constexpr static std::array ExternalLibraries = {
-            Library { "PatternLanguage", "WerWolv", "https://github.com/WerWolv/PatternLanguage" },
-            Library { "libwolv", "WerWolv", "https://github.com/WerWolv/libwolv" },
-            Library { "libromfs", "WerWolv", "https://github.com/WerWolv/libromfs" },
+            ExternalResource { .name="PatternLanguage", .author="WerWolv", .link="https://github.com/WerWolv/PatternLanguage" },
+            ExternalResource { .name="libwolv", .author="WerWolv", .link="https://github.com/WerWolv/libwolv" },
+            ExternalResource { .name="libromfs", .author="WerWolv", .link="https://github.com/WerWolv/libromfs" },
         };
 
         constexpr static std::array ThirdPartyLibraries = {
-            Library { "json", "nlohmann", "https://github.com/nlohmann/json" },
-            Library { "fmt", "fmtlib", "https://github.com/fmtlib/fmt" },
-            Library { "nativefiledialog-extended", "btzy", "https://github.com/btzy/nativefiledialog-extended" },
-            Library { "xdgpp", "danyspin97", "https://sr.ht/~danyspin97/xdgpp" },
-            Library { "capstone", "aquynh", "https://github.com/aquynh/capstone" },
-            Library { "microtar", "rxi", "https://github.com/rxi/microtar" },
-            Library { "yara", "VirusTotal", "https://github.com/VirusTotal/yara" },
-            Library { "edlib", "Martinsos", "https://github.com/Martinsos/edlib" },
-            Library { "HashLibPlus", "ron4fun", "https://github.com/ron4fun/HashLibPlus" },
-            Library { "miniaudio", "mackron", "https://github.com/mackron/miniaudio" },
-            Library { "freetype", "freetype", "https://gitlab.freedesktop.org/freetype/freetype" },
-            Library { "mbedTLS", "ARMmbed", "https://github.com/ARMmbed/mbedtls" },
-            Library { "curl", "curl", "https://github.com/curl/curl" },
-            Library { "file", "file", "https://github.com/file/file" },
-            Library { "glfw", "glfw", "https://github.com/glfw/glfw" },
-            Library { "llvm", "llvm-project", "https://github.com/llvm/llvm-project" },
-            Library { "Boost.Regex", "John Maddock", "https://github.com/boostorg/regex" },
+            ExternalResource { .name="json", .author="nlohmann", .link="https://github.com/nlohmann/json" },
+            ExternalResource { .name="fmt", .author="fmtlib", .link="https://github.com/fmtlib/fmt" },
+            ExternalResource { .name="nativefiledialog-extended", .author="btzy", .link="https://github.com/btzy/nativefiledialog-extended" },
+            ExternalResource { .name="xdgpp", .author="danyspin97", .link="https://sr.ht/~danyspin97/xdgpp" },
+            ExternalResource { .name="capstone", .author="aquynh", .link="https://github.com/aquynh/capstone" },
+            ExternalResource { .name="microtar", .author="rxi", .link="https://github.com/rxi/microtar" },
+            ExternalResource { .name="yara", .author="VirusTotal", .link="https://github.com/VirusTotal/yara" },
+            ExternalResource { .name="edlib", .author="Martinsos", .link="https://github.com/Martinsos/edlib" },
+            ExternalResource { .name="HashLibPlus", .author="ron4fun", .link="https://github.com/ron4fun/HashLibPlus" },
+            ExternalResource { .name="miniaudio", .author="mackron", .link="https://github.com/mackron/miniaudio" },
+            ExternalResource { .name="freetype", .author="freetype", .link="https://gitlab.freedesktop.org/freetype/freetype" },
+            ExternalResource { .name="mbedTLS", .author="ARMmbed", .link="https://github.com/ARMmbed/mbedtls" },
+            ExternalResource { .name="curl", .author="curl", .link="https://github.com/curl/curl" },
+            ExternalResource { .name="file", .author="file", .link="https://github.com/file/file" },
+            ExternalResource { .name="glfw", .author="glfw", .link="https://github.com/glfw/glfw" },
+            ExternalResource { .name="llvm", .author="LLVM Maintainers", .link="https://github.com/llvm/llvm-project" },
+            ExternalResource { .name="Boost.Regex", .author="John Maddock", .link="https://github.com/boostorg/regex" },
+            ExternalResource { .name="md4c", .author="mity", .link="https://github.com/mity/md4c" },
+            ExternalResource { .name="lunasvg", .author="sammycage", .link="https://github.com/sammycage/lunasvg" },
+            ExternalResource { .name="zlib", .author="madler", .link="https://github.com/madler/zlib" },
+            ExternalResource { .name="bzip2", .author="federicomenaquintero", .link="https://gitlab.com/federicomenaquintero/bzip2" },
+            ExternalResource { .name="liblzma", .author="tukaani", .link="https://github.com/tukaani-project/xz" },
+            ExternalResource { .name="zstd", .author="Facebook", .link="https://github.com/facebook/zstd" },
+            ExternalResource { .name="libssh2", .author="libssh2 Maintainers", .link="https://github.com/libssh2/libssh2" },
+        };
+
+        constexpr static std::array ThirdPartyResources {
+            ExternalResource { .name="VSCode Icons", .author="Microsoft", .link="https://github.com/microsoft/vscode-codicons" },
+            ExternalResource { .name="Blender Icons", .author="Blender Maintainers", .link="https://github.com/blender/blender" },
+            ExternalResource { .name="Tabler Icons", .author="codecalm", .link="https://github.com/tabler/tabler-icons" },
+            ExternalResource { .name="JetBrains Mono", .author="JetBrains", .link="https://github.com/JetBrains/JetBrainsMono" },
+            ExternalResource { .name="Unifont", .author="GNU", .link="https://unifoundry.com/unifont" },
         };
 
         constexpr static auto drawTable = [](const char *category, const auto &libraries) {
@@ -365,7 +389,7 @@ namespace hex::plugin::builtin {
                     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, scaled({ 12, 3 }));
 
                     if (ImGui::BeginChild(library.link, ImVec2(), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY)) {
-                        if (ImGuiExt::Hyperlink(hex::format("{}/{}", library.author, library.name).c_str())) {
+                        if (ImGuiExt::Hyperlink(fmt::format("{}/{}", library.author, library.name).c_str())) {
                             hex::openWebpage(library.link);
                         }
                         ImGui::SetItemTooltip("%s", library.link);
@@ -392,6 +416,7 @@ namespace hex::plugin::builtin {
         drawTable("ImGui", ImGuiLibraries);
         drawTable("External", ExternalLibraries);
         drawTable("Third Party", ThirdPartyLibraries);
+        drawTable("Resources", ThirdPartyResources);
     }
 
     void ViewAbout::drawLoadedPlugins() {
@@ -444,7 +469,7 @@ namespace hex::plugin::builtin {
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(plugin.getPluginDescription().c_str());
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(plugin.isLoaded() ? ICON_VS_CHECK : ICON_VS_CLOSE);
+        ImGui::TextUnformatted(plugin.isInitialized() ? ICON_VS_CHECK : ICON_VS_CLOSE);
 
         if (open) {
             for (const auto &feature : plugin.getFeatures()) {
@@ -471,8 +496,9 @@ namespace hex::plugin::builtin {
                 { "Magic",                          &paths::Magic                },
                 { "Plugins",                        &paths::Plugins              },
                 { "Yara Patterns",                  &paths::Yara                 },
-                { "Yara Advaned Analysis",          &paths::YaraAdvancedAnalysis },
+                { "Yara Advanced Analysis",         &paths::YaraAdvancedAnalysis },
                 { "Config",                         &paths::Config               },
+                { "Updates",                        &paths::Updates              },
                 { "Backups",                        &paths::Backups              },
                 { "Resources",                      &paths::Resources            },
                 { "Constants lists",                &paths::Constants            },
@@ -527,35 +553,10 @@ namespace hex::plugin::builtin {
 
     }
 
-    static void drawRegularLine(const std::string& line) {
-        ImGui::Bullet();
-        ImGui::SameLine();
-
-        // Check if the line contains bold text
-        auto boldStart = line.find("**");
-        if (boldStart == std::string::npos) {
-            // Draw the line normally
-            ImGui::TextUnformatted(line.c_str());
-
-            return;
-        }
-
-        // Find the end of the bold text
-        auto boldEnd = line.find("**", boldStart + 2);
-
-        // Draw the line with the bold text highlighted
-        ImGui::TextUnformatted(line.substr(0, boldStart).c_str());
-        ImGui::SameLine(0, 0);
-        ImGuiExt::TextFormattedColored(ImGuiExt::GetCustomColorVec4(ImGuiCustomCol_Highlight), "{}",
-                                       line.substr(boldStart + 2, boldEnd - boldStart - 2).c_str());
-        ImGui::SameLine(0, 0);
-        ImGui::TextUnformatted(line.substr(boldEnd + 2).c_str());
-    }
-
     struct ReleaseNotes {
         std::string title;
         std::string versionString;
-        std::vector<std::string> notes;
+        AutoReset<std::shared_ptr<ui::Markdown>> markdown;
     };
 
     static ReleaseNotes parseReleaseNotes(const HttpRequest::Result<std::string>& response) {
@@ -564,7 +565,7 @@ namespace hex::plugin::builtin {
 
         if (!response.isSuccess()) {
             // An error occurred, display it
-            notes.notes.push_back("## HTTP Error: " + std::to_string(response.getStatusCode()));
+            notes.markdown = std::make_shared<ui::Markdown>("## HTTP Error: " + std::to_string(response.getStatusCode()));
 
             return notes;
         }
@@ -581,9 +582,14 @@ namespace hex::plugin::builtin {
 
             // Get the release notes and split it into lines
             auto body = json["body"].get<std::string>();
-            notes.notes = wolv::util::splitString(body, "\r\n");
+
+            std::string content;
+            content += fmt::format("# {} | {}\n", notes.versionString, notes.title);
+            content += fmt::format("---\n");
+            content += body;
+            notes.markdown = std::make_shared<ui::Markdown>(content);
         } catch (std::exception &e) {
-            notes.notes.push_back("## Error: " + std::string(e.what()));
+            notes.markdown = std::make_shared<ui::Markdown>("## Error: " + std::string(e.what()));
         }
 
         return notes;
@@ -610,34 +616,8 @@ namespace hex::plugin::builtin {
             }
         }
 
-        // Draw the release title
-        if (!notes.title.empty()) {
-            auto title = hex::format("{}: {}", notes.versionString, notes.title);
-            ImGuiExt::Header(title.c_str(), true);
-            ImGui::Separator();
-        }
-
-        // Draw the release notes and format them using parts of the GitHub Markdown syntax
-        // This is not a full implementation of the syntax, but it's enough to make the release notes look good.
-        for (const auto &line : notes.notes) {
-            if (line.starts_with("## ")) {
-                // Draw H2 Header
-                ImGuiExt::Header(line.substr(3).c_str());
-            } else if (line.starts_with("### ")) {
-                // Draw H3 Header
-                ImGuiExt::Header(line.substr(4).c_str());
-            } else if (line.starts_with("- ")) {
-                // Draw bullet point
-                drawRegularLine(line.substr(2));
-            } else if (line.starts_with("    - ")) {
-                // Draw further indented bullet point
-                ImGui::Indent();
-                ImGui::Indent();
-                drawRegularLine(line.substr(6));
-                ImGui::Unindent();
-                ImGui::Unindent();
-            }
-        }
+        if (*notes.markdown != nullptr)
+            (*notes.markdown)->draw();
     }
 
     struct Commit {
@@ -683,7 +663,7 @@ namespace hex::plugin::builtin {
                 auto url = commit["html_url"].get<std::string>();
                 auto sha = commit["sha"].get<std::string>();
                 auto date = commit["commit"]["author"]["date"].get<std::string>();
-                auto author = hex::format("{} <{}>",
+                auto author = fmt::format("{} <{}>",
                                           commit["commit"]["author"]["name"].get<std::string>(),
                                           commit["commit"]["author"]["email"].get<std::string>()
                 );
@@ -809,6 +789,18 @@ namespace hex::plugin::builtin {
         ImGui::Indent(indentation);
         ImGuiExt::TextFormattedWrapped("{}", romfs::get("licenses/LICENSE").string());
         ImGui::Unindent(indentation);
+
+        static bool enabled = false;
+        if (ImGuiExt::DimmedButtonToggle("N" "E" "R" "D", &enabled)) {
+            if (enabled) {
+                ImHexApi::System::setPostProcessingShader(
+                    romfs::get("shaders/retro/vertex.glsl").data<char>(),
+                    romfs::get("shaders/retro/fragment.glsl").data<char>()
+                );
+            } else {
+                ImHexApi::System::setPostProcessingShader("", "");
+            }
+        }
     }
 
     void ViewAbout::drawAboutPopup() {
@@ -820,14 +812,14 @@ namespace hex::plugin::builtin {
         };
 
         constexpr std::array Tabs = {
-            Tab { "ImHex",                                      &ViewAbout::drawAboutMainPage       },
-            Tab { "hex.builtin.view.help.about.contributor",    &ViewAbout::drawContributorPage     },
-            Tab { "hex.builtin.view.help.about.libs",           &ViewAbout::drawLibraryCreditsPage  },
-            Tab { "hex.builtin.view.help.about.plugins",        &ViewAbout::drawLoadedPlugins       },
-            Tab { "hex.builtin.view.help.about.paths",          &ViewAbout::drawPathsPage           },
-            Tab { "hex.builtin.view.help.about.release_notes",  &ViewAbout::drawReleaseNotesPage    },
-            Tab { "hex.builtin.view.help.about.commits",        &ViewAbout::drawCommitHistoryPage   },
-            Tab { "hex.builtin.view.help.about.license",        &ViewAbout::drawLicensePage         },
+            Tab { .unlocalizedName="ImHex",                                      .function=&ViewAbout::drawAboutMainPage       },
+            Tab { .unlocalizedName="hex.builtin.view.help.about.contributor",    .function=&ViewAbout::drawContributorPage     },
+            Tab { .unlocalizedName="hex.builtin.view.help.about.libs",           .function=&ViewAbout::drawLibraryCreditsPage  },
+            Tab { .unlocalizedName="hex.builtin.view.help.about.plugins",        .function=&ViewAbout::drawLoadedPlugins       },
+            Tab { .unlocalizedName="hex.builtin.view.help.about.paths",          .function=&ViewAbout::drawPathsPage           },
+            Tab { .unlocalizedName="hex.builtin.view.help.about.release_notes",  .function=&ViewAbout::drawReleaseNotesPage    },
+            Tab { .unlocalizedName="hex.builtin.view.help.about.commits",        .function=&ViewAbout::drawCommitHistoryPage   },
+            Tab { .unlocalizedName="hex.builtin.view.help.about.license",        .function=&ViewAbout::drawLicensePage         },
         };
 
         // Allow the window to be closed by pressing ESC

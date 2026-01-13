@@ -29,13 +29,22 @@
 
 ## Supporting
 
-If you like my work, please consider supporting me on GitHub Sponsors, Patreon or PayPal. Thanks a lot!
+If you like my work, please consider supporting me on GitHub Sponsors, Ko-Fi or PayPal. Thanks a lot!
 
 <p align="center">
 <a href="https://github.com/sponsors/WerWolv"><img src="https://werwolv.net/assets/github_banner.png" alt="GitHub donate button" /></a>
-<a href="https://www.patreon.com/werwolv"><img src="https://c5.patreon.com/external/logo/become_a_patron_button.png" alt="Patreon donate button" /></a>
+<a href="https://ko-fi.com/WerWolv"><img src="https://werwolv.net/assets/kofi_banner.png" alt="Ko-Fi donate button" /></a>
 <a href="https://werwolv.net/donate"><img src="https://werwolv.net/assets/paypal_banner.png" alt="PayPal donate button" /></a>
 </p>
+
+### Notable Sponsors
+|                                                                                                     |                                                                                   |
+|:---------------------------------------------------------------------------------------------------:|-----------------------------------------------------------------------------------|
+| [![JetBrains logo](https://avatars.githubusercontent.com/u/878437?s=48)](https://www.jetbrains.com) | JetBrains, providing us with free All Products Pack licenses for development      |
+|   [![SignPath logo](https://avatars.githubusercontent.com/u/34448643?s=48)](https://signpath.io/)   | SignPath, providing us with free Code Signing Certificates for our Windows builds |
+|     [![AWS logo](https://avatars.githubusercontent.com/u/2232217?s=48)](https://aws.amazon.com)     | Amazon, providing us with free AWS Cloud Credits for our CI                       |
+
+Would you like to appear here as well? Contact us at [imhex@werwolv.net](mailto:imhex@werwolv.net)!
 
 ## Screenshots
 ![Hex editor, patterns and data information](https://github.com/user-attachments/assets/902a7c4c-410d-490f-999e-14c856fec027)
@@ -107,6 +116,7 @@ If you like my work, please consider supporting me on GitHub Sponsors, Patreon o
   - Base64 files
   - IPS and IPS32 patches
   - Markdown reports
+  - Binary arrays for various programming languages
 </details>
 <details>
   <summary><strong>Data Inspector</strong></summary>
@@ -140,8 +150,13 @@ If you like my work, please consider supporting me on GitHub Sponsors, Patreon o
   - GDB Server
     - Access the RAM of a running process or embedded devices through GDB
   - Intel Hex and Motorola SREC data
+  - Base64 encoded data
+  - UDP Packets
+    - Support for displaying raw data received over UDP
   - Process Memory
     - Inspect the entire address space of a running process
+  - Remote Files over SSH with SFTP
+    - Support for loading files from remote servers using SSH and SFTP
 </details>
 <details>
   <summary><strong>Data searching</strong></summary>
@@ -212,6 +227,7 @@ If you like my work, please consider supporting me on GitHub Sponsors, Patreon o
     - WebAssembly
     - MOS65XX
     - Berkeley Packet Filter
+  - Support for writing custom disassemblers for your own architectures
 </details>
 <details>
   <summary><strong>Bookmarks</strong></summary>
@@ -261,6 +277,7 @@ If you like my work, please consider supporting me on GitHub Sponsors, Patreon o
   - Division by invariant multiplication calculator
   - TCP Client/Server
   - Euclidean algorithm calculator
+  - HTTP Requests
 </details>
 <details>
   <summary><strong>Built-in Content updater</strong></summary>
@@ -319,21 +336,23 @@ To use ImHex, the following minimal system requirements need to be met.
 
 - **OS**: 
   - **Windows**: Windows 7 or higher (Windows 10/11 recommended)
-  - **macOS**: macOS 13 (Ventura) or higher, 
-    - Lower versions should still work too, but you'll need to compile ImHex yourself. The release binaries will NOT work.
+  - **macOS**: macOS 15 (Sequoia) or higher, 
+    - Lower versions should still work too, but you'll need to compile ImHex yourself. The release binaries will NOT work due to GitHub not having any macOS 15 or lower CI runners available.
     - The macOS build is not signed and will require you to manually allow them in the Security & Privacy settings.
-  - **Linux**: "Modern" Linux. The following distributions have official releases available. Other distros are supported through the AppImage and Flatpak releases.
+  - **Linux**: "Modern" Linux. The following distributions have official releases available. Other distros are supported through the AppImage, Flatpak and Snap releases.
     - Ubuntu and Debian
     - Fedora
     - RHEL/AlmaLinux
     - Arch Linux
     - Basically any other distro will work as well when compiling ImHex from sources.
-- **CPU**: Officially supported are x86_64 and ARM64, though any Little Endian 64 bit CPU should work.
+  - **FreeBSD**: Tested on FreeBSD 14.3
+    - Other versions will most likely work too but are untested
+- **CPU**: Officially supported are x86, AMD64 and ARM64, though any Little Endian CPU should work.
 - **GPU**: OpenGL 3.0 or higher 
   - Integrated Intel HD iGPUs are supported, however certain drivers are known to cause various graphical artifacts, especially on Windows. Use at your own risk.
   - In case you don't have a GPU available, there are software rendered releases available for Windows and macOS
-- **RAM**: ~150MiB, more is required for more complex analysis
-- **Storage**: 150MiB
+- **RAM**: ~50MiB, more is required for more complex analysis
+- **Storage**: ~100MiB
 
 ## Installing
 
@@ -356,9 +375,20 @@ For more information, check out the [Compiling](/dist/compiling) guide.
 ## Contributing
 See [Contributing](/CONTRIBUTING.md)
 
-## Plugin development
 
+## Plugin development
 To develop plugins for ImHex, use the following template project to get started. You then have access to the entirety of libimhex as well as the ImHex API and the Content Registry to interact with ImHex or to add new content.
+To build a plugin, you will need to use our SDK
+
+### Getting the SDK locally
+You can build the SDK by compiling ImHex like this:
+- `cmake -G Ninja -DIMHEX_BUNDLE_PLUGIN_SDK=ON -B build`
+- `cd build`
+- `DESTDIR=install ninja install`
+The SDK will then be available at `install/usr/local/share/imhex/sdk`. You will need to set the variable `IMHEX_SDK_PATH` to that (absolute) path.
+
+### Getting the SDK in a Github Actions CI
+You can use [this action](https://github.com/WerWolv/imhex-download-sdk) to automatically download the SDK to your Github Runner
 - [ImHex Plugin Template](https://github.com/WerWolv/ImHex-Plugin-Template)
 
 
@@ -366,9 +396,10 @@ To develop plugins for ImHex, use the following template project to get started.
 
 ### Contributors
 
+- [AxCut](https://github.com/paxcut) for a gigantic amount of contributions to the Pattern Text Editor and tons of other parts of ImHex
 - [iTrooz](https://github.com/iTrooz) for getting ImHex onto the Web as well as hundreds of contributions in every part of the project
 - [jumanji144](https://github.com/jumanji144) for huge contributions to the Pattern Language and ImHex's infrastructure
-- [Mary](https://github.com/marysaka) for her immense help porting ImHex to MacOS and help during development
+- [Mary](https://github.com/marysaka) for her immense help porting ImHex to macOS and help during development
 - [Roblabla](https://github.com/Roblabla) for adding MSI Installer support to ImHex
 - [Mailaender](https://github.com/Mailaender) for getting ImHex onto Flathub
 - Everybody else who has reported issues on Discord or GitHub that I had great conversations with :)
@@ -399,3 +430,18 @@ Notable exceptions to this are the following parts which are under the LGPLv2.1 
 - **/plugins/ui**: The UI plugin library that contains some common UI elements that can be used by other plugins
 
 The reason for this is to allow for proprietary plugins to be developed for ImHex.
+
+### Code Signing Policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+
+This program will not transfer any information to other networked systems
+unless specifically requested by the user or the person installing or
+operating it.
+
+#### People with direct push access
+- [WerWolv](https://github.com/WerWolv)
+- [iTrooz](https://github.com/iTrooz)
+- [jumanji144](https://github.com/jumanji144)
+- [AxCut](https://github.com/paxcut)

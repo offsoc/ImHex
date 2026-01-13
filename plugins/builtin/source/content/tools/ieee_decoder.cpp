@@ -1,6 +1,7 @@
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/settings.hpp>
 #include <hex/api/localization_manager.hpp>
 #include <hex/helpers/utils.hpp>
+#include <hex/helpers/scaling.hpp>
 
 #include <imgui.h>
 #include <hex/ui/imgui_imhex_extensions.h>
@@ -24,18 +25,18 @@ namespace hex::plugin::builtin {
 
         class IEEE754STATICS {
         public:
-            IEEE754STATICS() : value(0), exponentBitCount(8), mantissaBitCount(23), resultFloat(0) {}
+            IEEE754STATICS()  = default;
 
-            u128 value;
-            i32 exponentBitCount;
-            i32 mantissaBitCount;
-            long double resultFloat;
+            u128 value = 0;
+            i32 exponentBitCount = 8;
+            i32 mantissaBitCount =23;
+            long double resultFloat = 0;
         };
 
         static IEEE754STATICS ieee754statics;
 
 
-        enum class NumberType {
+        enum class NumberType: u8 {
             Normal,
             Zero,
             Denormal,
@@ -43,7 +44,7 @@ namespace hex::plugin::builtin {
             NaN,
         };
 
-        enum class InputType {
+        enum class InputType: u8 {
             Infinity,
             NotANumber,
             QuietNotANumber,
@@ -52,7 +53,7 @@ namespace hex::plugin::builtin {
             Invalid
         };
 
-        enum class ValueType {
+        enum class ValueType: u8 {
             Regular,
             SignalingNaN,
             QuietNaN,
@@ -74,9 +75,9 @@ namespace hex::plugin::builtin {
             i64 precision;
         } ieee754 = {};
 
-        std::string specialNumbers[] = {
-                "inf" , "Inf", "INF" , "nan" , "Nan" , "NAN",
-                "qnan","Qnan", "QNAN", "snan", "Snan", "SNAN"
+        constexpr static std::array SpecialNumbers = {
+            "inf" , "Inf", "INF" , "nan" , "Nan" , "NAN",
+            "qnan","Qnan", "QNAN", "snan", "Snan", "SNAN"
         };
 
 
@@ -345,7 +346,7 @@ namespace hex::plugin::builtin {
             }
         };
 
-        const static auto FloatToBits = [&specialNumbers](IEEE754 &ieee754, std::string decimalFloatingPointNumberString, int totalBitCount) {
+        const static auto FloatToBits = [](IEEE754 &ieee754, std::string decimalFloatingPointNumberString, int totalBitCount) {
 
             // Always obtain sign first.
             if (decimalFloatingPointNumberString[0] == '-') {
@@ -362,7 +363,7 @@ namespace hex::plugin::builtin {
 
             // Detect and use special numbers.
             for (u32 i = 0; i < 12; i++) {
-                if (decimalFloatingPointNumberString == specialNumbers[i]) {
+                if (decimalFloatingPointNumberString == SpecialNumbers[i]) {
                     inputType = InputType(i/3);
                     matchFound = true;
                     break;
@@ -646,7 +647,7 @@ namespace hex::plugin::builtin {
             ImGui::TableNextColumn();
 
             const auto mask = u64(hex::bitmask(totalBitCount + 1));
-            std::string maskString = hex::format("0x{:X}  ", mask);
+            std::string maskString = fmt::format("0x{:X}  ", mask);
 
             auto style = ImGui::GetStyle();
             inputFieldWidth = std::fmax(inputFieldWidth,

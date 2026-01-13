@@ -1,11 +1,11 @@
 #pragma once
 
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/imhex_api/fonts.hpp>
 
 namespace hex::fonts {
 
-    const static auto Default    = []{ return ImHexApi::Fonts::getFont("hex.fonts.font.default");     };
-    const static auto HexEditor  = []{ return ImHexApi::Fonts::getFont("hex.fonts.font.hex_editor");  };
-    const static auto CodeEditor = []{ return ImHexApi::Fonts::getFont("hex.fonts.font.code_editor"); };
+    [[nodiscard]] const ImHexApi::Fonts::Font& Default();
+    [[nodiscard]] const ImHexApi::Fonts::Font& HexEditor();
+    [[nodiscard]] const ImHexApi::Fonts::Font& CodeEditor();
 
 }

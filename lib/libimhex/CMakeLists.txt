@@ -40,12 +40,14 @@ set(LIBIMHEX_SOURCES
         source/helpers/imgui_hooks.cpp
         source/helpers/semantic_version.cpp
         source/helpers/keys.cpp
-        source/helpers/freetype.cpp
         source/helpers/udp_server.cpp
+        source/helpers/scaling.cpp
+        source/helpers/binary_pattern.cpp
 
         source/test/tests.cpp
 
         source/providers/provider.cpp
+        source/providers/cached_provider.cpp
         source/providers/memory_provider.cpp
         source/providers/undo/stack.cpp
 
@@ -55,19 +57,13 @@ set(LIBIMHEX_SOURCES
         source/ui/toast.cpp
         source/ui/banner.cpp
 
+        source/mcp/client.cpp
+        source/mcp/server.cpp
+
         source/subcommands/subcommands.cpp
 )
 
 if (APPLE)
-    set(OSX_SDK_PATH  /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX13.sdk)
-    if (NOT CMAKE_OSX_SYSROOT)
-        if (IS_DIRECTORY ${OSX_SDK_PATH})
-            set(CMAKE_OSX_SYSROOT ${OSX_SDK_PATH})
-        else ()
-            message(WARNING "CMAKE_OSX_SYSROOT not set and macOS SDK not found! Using default one.")
-        endif ()
-    endif ()
-
     set(LIBIMHEX_SOURCES ${LIBIMHEX_SOURCES}
             source/helpers/utils_macos.m
             source/helpers/macos_menu.m
@@ -96,6 +92,8 @@ else()
     set(LIBIMHEX_LIBRARY_TYPE PUBLIC)
     target_compile_definitions(libimhex PRIVATE IMHEX_PROJECT_NAME="${PROJECT_NAME}")
 endif()
+
+addCppCheck(libimhex)
 
 
 if (DEFINED IMHEX_COMMIT_HASH_LONG AND DEFINED IMHEX_COMMIT_BRANCH)
@@ -131,6 +129,9 @@ endif ()
 
 addDefineToSource(source/api/imhex_api.cpp "IMHEX_VERSION=\"${IMHEX_VERSION_STRING}\"")
 
+string(TIMESTAMP IMHEX_BUILD_DATE UTC)
+addDefineToSource(source/api/imhex_api.cpp "IMHEX_BUILD_DATE=\"${IMHEX_BUILD_DATE}\"")
+
 enableUnityBuild(libimhex)
 setupCompilerFlags(libimhex)
 
@@ -149,7 +150,8 @@ if (NOT IMHEX_EXTERNAL_PLUGIN_BUILD)
         target_compile_definitions(libimhex PRIVATE EXPORT_SYMBOLS=1)
     elseif (APPLE)
         find_library(FOUNDATION NAMES Foundation)
-        target_link_libraries(libimhex PUBLIC ${FOUNDATION})
+        find_library(USERNOTIFICATIONS NAMES UserNotifications)
+        target_link_libraries(libimhex PUBLIC ${FOUNDATION} ${USERNOTIFICATIONS})
     endif ()
 
     target_link_libraries(libimhex PRIVATE libpl microtar ${NFD_LIBRARIES} magic)

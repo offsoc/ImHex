@@ -32,7 +32,7 @@ namespace hex::plugin::builtin {
             )
             .addHighlight("hex.builtin.tutorial.introduction.step2.highlight",
             {
-                "Welcome Screen/Start##SubWindow_69AA6996",
+                "Welcome Screen/Start_087A287D",
                 Lang("hex.builtin.welcome.start.create_file")
             })
             .onAppear([&step] {
@@ -60,7 +60,7 @@ namespace hex::plugin::builtin {
                 View::toWindowName("hex.builtin.view.data_inspector.name")
             })
             .onAppear([]{
-                ImHexApi::HexEditor::setSelection(Region { 0, 1 });
+                ImHexApi::HexEditor::setSelection(Region { .address=0, .size=1 });
             })
             .allowSkip();
         }
@@ -75,7 +75,7 @@ namespace hex::plugin::builtin {
             })
             .onAppear([] {
                 RequestSetPatternLanguageCode::post("\n\n\n\n\n\nstruct Test {\n    u8 value;\n};\n\nTest test @ 0x00;");
-                RequestRunPatternCode::post();
+                RequestTriggerPatternEvaluation::post();
             })
             .allowSkip();
         }
@@ -85,7 +85,7 @@ namespace hex::plugin::builtin {
 
             step.addHighlight("hex.builtin.tutorial.introduction.step6.highlight", {
                 "##MainMenuBar",
-                "##menubar",
+                "##MenuBar",
                 Lang("hex.builtin.menu.help")
             })
             .addHighlight({

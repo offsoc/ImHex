@@ -1,9 +1,14 @@
+#include <cstddef>
+#include "wolv/types.hpp"
+#include <cmath>
 #include <hex/helpers/opengl.hpp>
 #include <opengl_support.h>
 
-#include <hex/helpers/utils.hpp>
 #include <hex/helpers/logger.hpp>
 
+#include <string_view>
+#include <vector>
+#include <span>
 #include <wolv/utils/guards.hpp>
 
 #include <numbers>
@@ -61,6 +66,10 @@ namespace hex::gl {
     }
 
     Shader::Shader(std::string_view vertexSource, std::string_view fragmentSource) {
+        if (vertexSource.empty() || fragmentSource.empty()) {
+            return;
+        }
+
         auto vertexShader = glCreateShader(GL_VERTEX_SHADER);
         this->compile(vertexShader, vertexSource);
 
@@ -79,7 +88,7 @@ namespace hex::gl {
         glGetProgramiv(m_program, GL_LINK_STATUS, &result);
         if (!result) {
             std::vector<char> log(512);
-            glGetShaderInfoLog(m_program, log.size(), nullptr, log.data());
+            glGetProgramInfoLog(m_program, log.size(), nullptr, log.data());
             log::error("Failed to link shader: {}", log.data());
 
             glDeleteProgram(m_program);
@@ -98,6 +107,9 @@ namespace hex::gl {
     }
 
     Shader& Shader::operator=(Shader &&other) noexcept {
+        if (m_program != 0)
+            glDeleteProgram(m_program);
+
         m_program = other.m_program;
         other.m_program = 0;
         return *this;
@@ -119,18 +131,25 @@ namespace hex::gl {
         glUniform1f(getUniformLocation(name), value);
     }
 
+    bool Shader::hasUniform(std::string_view name) {
+        return getUniformLocation(name) != -1;
+    }
+
+
 
     GLint Shader::getUniformLocation(std::string_view name) {
-        auto uniform = m_uniforms.find(name.data());
+        auto nameStr = std::string(name);
+        auto uniform = m_uniforms.find(nameStr);
         if (uniform == m_uniforms.end()) {
-            auto location = glGetUniformLocation(m_program, name.data());
+            auto location = glGetUniformLocation(m_program, nameStr.data());
             if (location == -1) {
                 log::warn("Uniform '{}' not found in shader", name);
+                m_uniforms[nameStr] = -1;
                 return -1;
             }
 
-            m_uniforms[name.data()] = location;
-            uniform = m_uniforms.find(name.data());
+            m_uniforms[nameStr] = location;
+            uniform = m_uniforms.find(nameStr);
         }
 
         return uniform->second;
@@ -277,6 +296,10 @@ namespace hex::gl {
     Texture& Texture::operator=(Texture &&other) noexcept {
         m_texture = other.m_texture;
         other.m_texture = 0;
+
+        m_width = other.m_width;
+        m_height = other.m_height;
+
         return *this;
     }
 

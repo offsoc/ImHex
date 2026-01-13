@@ -8,11 +8,17 @@ if (IMHEX_EXTERNAL_PLUGIN_BUILD)
     set(LIBIMHEX_LIBRARY_TYPE_PUBLIC INTERFACE)
     set(LIBIMHEX_LIBRARY_TYPE_PRIVATE INTERFACE)
 else()
-    add_library(tracing STATIC
+    if (IMHEX_STATIC_LINK_PLUGINS)
+        set(TRACING_LIBRARY_TYPE OBJECT)
+    else()
+        set(TRACING_LIBRARY_TYPE STATIC)
+    endif()
+
+    add_library(tracing ${TRACING_LIBRARY_TYPE}
             source/stacktrace.cpp
             source/exceptions.cpp
     )
-    target_link_libraries(tracing PRIVATE LLVMDemangle)
+    target_link_libraries(tracing PRIVATE LLVMDemangle ${FMT_LIBRARIES})
 
     set(LIBIMHEX_LIBRARY_TYPE_PUBLIC PUBLIC)
     set(LIBIMHEX_LIBRARY_TYPE_PRIVATE PRIVATE)
@@ -40,7 +46,7 @@ if (NOT IMHEX_DISABLE_STACKTRACE)
 
         if (HAVE_STDCPPEXP)
             message(STATUS "<stacktrace> enabled!")
-            target_link_libraries(tracing ${LIBIMHEX_LIBRARY_TYPE_PRIVATE} stdc++exp)
+            target_link_libraries(tracing ${LIBIMHEX_LIBRARY_TYPE_PRIVATE} stdc++exp dl)
             if (HAVE_STDCPP_LIBBACKTRACE)
                 target_link_libraries(tracing ${LIBIMHEX_LIBRARY_TYPE_PRIVATE} stdc++_libbacktrace)
             endif()
@@ -73,8 +79,8 @@ endif()
 
 if (IMHEX_TRACE_EXCEPTIONS)
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-        target_link_options(tracing ${LIBIMHEX_LIBRARY_TYPE_PUBLIC} "-Wl,--wrap=__cxa_throw")
-        target_compile_definitions(tracing ${LIBIMHEX_LIBRARY_TYPE_PRIVATE} HEX_WRAP_CXA_THROW)
+        target_link_options(tracing ${LIBIMHEX_LIBRARY_TYPE_PUBLIC} "-Wl,--wrap=_ZSt21__glibcxx_assert_failPKciS0_S0_")
+        target_compile_definitions(tracing ${LIBIMHEX_LIBRARY_TYPE_PRIVATE} HEX_WRAP_GLIBCXX_ASSERT_FAIL)
     elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         # Not supported currently
     endif()

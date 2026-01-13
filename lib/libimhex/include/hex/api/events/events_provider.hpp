@@ -5,12 +5,17 @@
 
 /* Provider events definitions */
 namespace hex {
+
+    namespace prv {
+        class Provider;
+    }
+
     /**
      * @brief Called when the provider is created.
      * This event is responsible for (optionally) initializing the provider and calling EventProviderOpened
      * (although the event can also be called manually without problem)
      */
-    EVENT_DEF(EventProviderCreated, prv::Provider *);
+    EVENT_DEF(EventProviderCreated, std::shared_ptr<prv::Provider>);
 
     /**
      * @brief Called as a continuation of EventProviderCreated

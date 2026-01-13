@@ -28,4 +28,7 @@ apt install -y \
   libbz2-dev            \
   liblzma-dev           \
   libzstd-dev           \
-  liblz4-dev
+  liblz4-dev            \
+  libssh2-1-dev         \
+  libmd4c-dev           \
+  libmd4c-html0-dev

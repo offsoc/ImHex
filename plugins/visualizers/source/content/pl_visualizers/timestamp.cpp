@@ -2,13 +2,12 @@
 
 #include <content/visualizer_helpers.hpp>
 
-#include <numbers>
+#include <hex/helpers/scaling.hpp>
 
 #include <imgui.h>
-#include <hex/api/imhex_api.hpp>
-
 #include <hex/ui/imgui_imhex_extensions.h>
 
+#include <numbers>
 #include <chrono>
 #include <fmt/chrono.h>
 
@@ -82,7 +81,7 @@ namespace hex::plugin::visualizers {
 
                 // Draw clock sections and numbers
                 for (u8 i = 0; i < 12; ++i) {
-                    auto text = hex::format("{}", (((i + 2) % 12) + 1));
+                    auto text = fmt::format("{}", (((i + 2) % 12) + 1));
                     drawList->AddLine(center + sectionPos(i) * size / 2.2F, center + sectionPos(i) * size / 2, ImGui::GetColorU32(ImGuiCol_TextDisabled), 1_scaled);
                     drawList->AddText(center + sectionPos(i) * size / 3.0F - ImGui::CalcTextSize(text.c_str()) / 2, ImGui::GetColorU32(ImGuiCol_Text), text.c_str());
                 }

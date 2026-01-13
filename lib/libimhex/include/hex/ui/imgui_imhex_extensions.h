@@ -11,6 +11,7 @@
 #include <hex/helpers/fmt.hpp>
 #include <hex/helpers/concepts.hpp>
 #include <hex/helpers/fs.hpp>
+#include <hex/helpers/scaling.hpp>
 
 #include <wolv/utils/string.hpp>
 
@@ -99,6 +100,10 @@ namespace ImGuiExt {
             return m_textureId != 0;
         }
 
+        [[nodiscard]] operator ImTextureRef() const noexcept {
+            return m_textureId;
+        }
+
         [[nodiscard]] operator ImTextureID() const noexcept {
             return m_textureId;
         }
@@ -129,8 +134,8 @@ namespace ImGuiExt {
     bool IconHyperlink(const char *icon, const char *label, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
     bool Hyperlink(const char *label, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
     bool BulletHyperlink(const char *label, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
-    bool DescriptionButton(const char *label, const char *description, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
-    bool DescriptionButtonProgress(const char *label, const char *description, float fraction, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
+    bool DescriptionButton(const char *label, const char *description, const char *icon, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
+    bool DescriptionButtonProgress(const char *label, const char *description, const char *icon, float fraction, const ImVec2 &size_arg = ImVec2(0, 0), ImGuiButtonFlags flags = 0);
 
     void HelpHover(const char *text, const char *icon = "(?)", ImU32 iconColor = ImGui::GetColorU32(ImGuiCol_ButtonActive));
 
@@ -149,6 +154,7 @@ namespace ImGuiExt {
     bool ToolBarButton(const char *symbol, ImVec4 color);
     bool IconButton(const char *symbol, ImVec4 color, ImVec2 size_arg = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
 
+    bool InputPrefix(const char* label, const char *prefix, std::string &buffer, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
     bool InputIntegerPrefix(const char* label, const char *prefix, void *value, ImGuiDataType type, const char *format, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
     bool InputHexadecimal(const char* label, u32 *value, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
     bool InputHexadecimal(const char* label, u64 *value, ImGuiInputTextFlags flags = ImGuiInputTextFlags_None);
@@ -190,17 +196,19 @@ namespace ImGuiExt {
 
     void ProgressBar(float fraction, ImVec2 size_value = ImVec2(0, 0), float yOffset = 0.0F);
 
-    inline void TextFormatted(std::string_view fmt, auto &&...args) {
+    [[nodiscard]] bool IsDarkBackground(const ImColor& bgColor);
+
+    void TextFormatted(std::string_view fmt, auto &&...args) {
         if constexpr (sizeof...(args) == 0) {
             ImGui::TextUnformatted(fmt.data(), fmt.data() + fmt.size());
         } else {
-            const auto string = hex::format(fmt, std::forward<decltype(args)>(args)...);
+            const auto string = fmt::format(fmt::runtime(fmt), std::forward<decltype(args)>(args)...);
             ImGui::TextUnformatted(string.c_str(), string.c_str() + string.size());
         }
     }
 
-    inline void TextFormattedSelectable(std::string_view fmt, auto &&...args) {
-        auto text = hex::format(fmt, std::forward<decltype(args)>(args)...);
+    void TextFormattedSelectable(std::string_view fmt, auto &&...args) {
+        auto text = fmt::format(fmt::runtime(fmt), std::forward<decltype(args)>(args)...);
 
         ImGui::PushID(text.c_str());
 
@@ -218,19 +226,25 @@ namespace ImGuiExt {
         ImGui::PopID();
     }
 
-    inline void TextFormattedColored(ImColor color, std::string_view fmt, auto &&...args) {
+    void TextFormattedColored(ImColor color, std::string_view fmt, auto &&...args) {
         ImGui::PushStyleColor(ImGuiCol_Text, color.Value);
         ImGuiExt::TextFormatted(fmt, std::forward<decltype(args)>(args)...);
         ImGui::PopStyleColor();
     }
 
-    inline void TextFormattedDisabled(std::string_view fmt, auto &&...args) {
+    void TextFormattedReadableColor(ImColor backgroundColor, std::string_view fmt, auto &&...args) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IsDarkBackground(backgroundColor) ? 0xFFFFFFFF : 0xFF000000);
+        ImGuiExt::TextFormatted(fmt, std::forward<decltype(args)>(args)...);
+        ImGui::PopStyleColor();
+    }
+
+    void TextFormattedDisabled(std::string_view fmt, auto &&...args) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
         ImGuiExt::TextFormatted(fmt, std::forward<decltype(args)>(args)...);
         ImGui::PopStyleColor();
     }
 
-    inline void TextFormattedWrapped(std::string_view fmt, auto &&...args) {
+    void TextFormattedWrapped(std::string_view fmt, auto &&...args) {
         const bool need_backup = ImGuiExt::GetTextWrapPos() < 0.0F;  // Keep existing wrap position if one is already set
         if (need_backup)
             ImGui::PushTextWrapPos(0.0F);
@@ -239,12 +253,13 @@ namespace ImGuiExt {
             ImGui::PopTextWrapPos();
     }
 
-    inline void TextFormattedWrappedSelectable(std::string_view fmt, auto &&...args) {
+    void TextFormattedWrappedSelectable(std::string_view fmt, auto &&...args) {
+        using namespace hex;
         // Manually wrap text, using the letter M (generally the widest character in non-monospaced fonts) to calculate the character width to use.
         auto text = wolv::util::trim(wolv::util::wrapMonospacedString(
-                hex::format(fmt, std::forward<decltype(args)>(args)...),
+                fmt::format(fmt::runtime(fmt), std::forward<decltype(args)>(args)...),
                 ImGui::CalcTextSize("M").x,
-                ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize - ImGui::GetStyle().FrameBorderSize
+                std::max(100_scaled, ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize - ImGui::GetStyle().FrameBorderSize)
         ));
 
         auto textSize = ImGui::CalcTextSize(text.c_str());
@@ -255,7 +270,7 @@ namespace ImGuiExt {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0F);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4());
 
-        ImGui::PushItemWidth(ImGui::CalcTextSize(text.c_str()).x + ImGui::GetStyle().FramePadding.x * 2);
+        ImGui::PushItemWidth(textSize.x + ImGui::GetStyle().FramePadding.x * 2);
         ImGui::InputTextMultiline(
                 "##",
                 const_cast<char *>(text.c_str()),
@@ -272,14 +287,14 @@ namespace ImGuiExt {
     }
 
     void TextUnformattedCentered(const char *text);
-    inline void TextFormattedCentered(std::string_view fmt, auto &&...args) {
-        auto text = hex::format(fmt, std::forward<decltype(args)>(args)...);
+    void TextFormattedCentered(std::string_view fmt, auto &&...args) {
+        auto text = fmt::format(fmt::runtime(fmt), std::forward<decltype(args)>(args)...);
         TextUnformattedCentered(text.c_str());
     }
 
 
-    inline void TextFormattedCenteredHorizontal(std::string_view fmt, auto &&...args) {
-        auto text = hex::format(fmt, std::forward<decltype(args)>(args)...);
+    void TextFormattedCenteredHorizontal(std::string_view fmt, auto &&...args) {
+        auto text = fmt::format(fmt::runtime(fmt), std::forward<decltype(args)>(args)...);
         auto availableSpace = ImGui::GetContentRegionAvail();
         auto textSize = ImGui::CalcTextSize(text.c_str(), nullptr, false, availableSpace.x * 0.75F);
 
@@ -299,11 +314,12 @@ namespace ImGuiExt {
 
     bool BitCheckbox(const char* label, bool* v);
 
-    bool DimmedButton(const char* label, ImVec2 size = ImVec2(0, 0));
+    bool DimmedButton(const char* label, ImVec2 size = ImVec2(0, 0), ImGuiButtonFlags flags = ImGuiButtonFlags_None);
     bool DimmedIconButton(const char *symbol, ImVec4 color, ImVec2 size = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
     bool DimmedButtonToggle(const char *icon, bool *v, ImVec2 size = ImVec2(0, 0), ImVec2 iconOffset = ImVec2(0, 0));
     bool DimmedIconToggle(const char *icon, bool *v);
     bool DimmedIconToggle(const char *iconOn, const char *iconOff, bool *v);
+    bool DimmedArrowButton(const char *id, ImGuiDir dir, ImVec2 size = ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
 
     void TextOverlay(const char *text, ImVec2 pos, float maxWidth = -1);
 
@@ -362,6 +378,12 @@ namespace ImGuiExt {
         else static_assert(hex::always_false<T>::value, "Invalid data type!");
     }
 
+    struct ImGuiTestEngine {
+        ImGuiTestEngine() = delete;
+
+        static void setEnabled(bool enabled);
+        [[nodiscard]] static bool isEnabled();
+    };
 }
 
 // these functions are exception because they just allow conversion from string to char*, they do not really add anything

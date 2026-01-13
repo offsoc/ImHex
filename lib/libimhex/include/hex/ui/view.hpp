@@ -3,17 +3,14 @@
 #include <hex.hpp>
 
 #include <imgui.h>
-#include <imgui_internal.h>
 #include <hex/ui/imgui_imhex_extensions.h>
 
-#include <hex/api/imhex_api.hpp>
 #include <hex/api/shortcut_manager.hpp>
 #include <hex/api/localization_manager.hpp>
 
-#include <hex/providers/provider.hpp>
 #include <hex/providers/provider_data.hpp>
-#include <hex/helpers/utils.hpp>
 
+#include <hex/helpers/scaling.hpp>
 
 #include <map>
 #include <string>
@@ -29,7 +26,7 @@ namespace hex {
          * @brief Draws the view
          * @note Do not override this method. Override drawContent() instead
          */
-        virtual void draw() = 0;
+        virtual void draw(ImGuiWindowFlags extraFlags = ImGuiWindowFlags_None) = 0;
 
         /**
          * @brief Draws the content of the view
@@ -79,44 +76,64 @@ namespace hex {
          */
         [[nodiscard]] virtual ImGuiWindowFlags getWindowFlags() const;
 
-        [[nodiscard]] virtual bool shouldStoreWindowState() const { return true; }
+        /**
+         * @brief Returns a view whose menu items should be additionally visible when this view is focused
+         * @return
+         */
+        [[nodiscard]] virtual View* getMenuItemInheritView() const { return nullptr; }
+
 
         [[nodiscard]] const char *getIcon() const { return m_icon; }
+        [[nodiscard]] const UnlocalizedString& getUnlocalizedName() const;
+        [[nodiscard]] std::string getName() const;
+
+        [[nodiscard]] virtual bool shouldDefaultFocus() const { return false; }
+        [[nodiscard]] virtual bool shouldStoreWindowState() const { return true; }
 
         [[nodiscard]] bool &getWindowOpenState();
         [[nodiscard]] const bool &getWindowOpenState() const;
 
-        [[nodiscard]] const UnlocalizedString &getUnlocalizedName() const;
-        [[nodiscard]] std::string getName() const;
+        [[nodiscard]] bool isFocused() const { return m_focused; }
+
+        [[nodiscard]] static std::string toWindowName(const UnlocalizedString &unlocalizedName);
+        [[nodiscard]] static const View* getLastFocusedView();
+        static void discardNavigationRequests();
+
+        void bringToFront();
 
         [[nodiscard]] bool didWindowJustOpen();
         void setWindowJustOpened(bool state);
 
-        void trackViewOpenState();
+        [[nodiscard]] bool didWindowJustClose();
+        void setWindowJustClosed(bool state);
 
-        static void discardNavigationRequests();
+        void trackViewState();
+        void setFocused(bool focused);
 
-        [[nodiscard]] static std::string toWindowName(const UnlocalizedString &unlocalizedName);
-
-        [[nodiscard]] bool isFocused() const { return m_focused; }
+    protected:
+        /**
+         * @brief Called when this view is opened (i.e. made visible).
+         */
+        virtual void onOpen() {}
 
         /**
-         * @brief Used for focus handling. Don't use this directly
-         * @param focused Whether this view is focused
+         * @brief Called when this view is closed (i.e. made invisible).
          */
-        void setFocused(bool focused) { m_focused = focused; }
+        virtual void onClose() {}
 
     public:
         class Window;
         class Special;
         class Floating;
+        class Scrolling;
         class Modal;
+        class FullScreen;
 
     private:
         UnlocalizedString m_unlocalizedViewName;
         bool m_windowOpen = false, m_prevWindowOpen = false;
         std::map<Shortcut, ShortcutManager::ShortcutEntry> m_shortcuts;
-        bool m_windowJustOpened = false;
+        bool m_windowJustOpened = false, m_windowJustClosed = false;
         const char *m_icon;
         bool m_focused = false;
 
@@ -131,14 +148,15 @@ namespace hex {
     public:
         explicit Window(UnlocalizedString unlocalizedName, const char *icon) : View(std::move(unlocalizedName), icon) {}
 
-        void draw() final {
-            if (this->shouldDraw()) {
-                ImGui::SetNextWindowSizeConstraints(this->getMinSize(), this->getMaxSize());
-                if (ImGui::Begin(View::toWindowName(this->getUnlocalizedName()).c_str(), &this->getWindowOpenState(), ImGuiWindowFlags_NoCollapse | this->getWindowFlags())) {
-                    this->drawContent();
-                }
-                ImGui::End();
-            }
+        /**
+         * @brief Draws help text for the view
+         */
+        virtual void drawHelpText() = 0;
+
+        void draw(ImGuiWindowFlags extraFlags = ImGuiWindowFlags_None) override;
+
+        virtual bool allowScroll() const {
+            return false;
         }
     };
 
@@ -150,12 +168,7 @@ namespace hex {
     public:
         explicit Special(UnlocalizedString unlocalizedName) : View(std::move(unlocalizedName), "") {}
 
-        void draw() final {
-            if (this->shouldDraw()) {
-                ImGui::SetNextWindowSizeConstraints(this->getMinSize(), this->getMaxSize());
-                this->drawContent();
-            }
-        }
+        void draw(ImGuiWindowFlags extraFlags = ImGuiWindowFlags_None) final;
     };
 
     /**
@@ -163,9 +176,26 @@ namespace hex {
      */
     class View::Floating : public View::Window {
     public:
-        explicit Floating(UnlocalizedString unlocalizedName) : Window(std::move(unlocalizedName), "") {}
+        explicit Floating(UnlocalizedString unlocalizedName, const char *icon) : Window(std::move(unlocalizedName), icon) {}
 
-        [[nodiscard]] ImGuiWindowFlags getWindowFlags() const override { return ImGuiWindowFlags_NoDocking; }
+        void draw(ImGuiWindowFlags extraFlags = ImGuiWindowFlags_None) final;
+
+        [[nodiscard]] bool shouldStoreWindowState() const override { return false; }
+    };
+
+    /**
+     * @brief A view that draws all its content at once without any scrolling being done by the window itself
+     */
+    class View::Scrolling : public View::Window {
+    public:
+        explicit Scrolling(UnlocalizedString unlocalizedName, const char *icon) : Window(std::move(unlocalizedName), icon) {}
+
+        void draw(ImGuiWindowFlags extraFlags = ImGuiWindowFlags_None) final;
+
+        bool allowScroll() const final {
+            return true;
+        }
+
         [[nodiscard]] bool shouldStoreWindowState() const override { return false; }
     };
 
@@ -174,28 +204,19 @@ namespace hex {
      */
     class View::Modal : public View {
     public:
-        explicit Modal(UnlocalizedString unlocalizedName) : View(std::move(unlocalizedName), "") {}
+        explicit Modal(UnlocalizedString unlocalizedName, const char *icon) : View(std::move(unlocalizedName), icon) {}
 
-        void draw() final {
-            if (this->shouldDraw()) {
-                if (this->getWindowOpenState())
-                    ImGui::OpenPopup(View::toWindowName(this->getUnlocalizedName()).c_str());
-
-                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5F, 0.5F));
-                ImGui::SetNextWindowSizeConstraints(this->getMinSize(), this->getMaxSize());
-                if (ImGui::BeginPopupModal(View::toWindowName(this->getUnlocalizedName()).c_str(), this->hasCloseButton() ? &this->getWindowOpenState() : nullptr, ImGuiWindowFlags_NoCollapse | this->getWindowFlags())) {
-                    this->drawContent();
-
-                    ImGui::EndPopup();
-                }
-
-                if (ImGui::IsKeyPressed(ImGuiKey_Escape))
-                    this->getWindowOpenState() = false;
-            }
-        }
+        void draw(ImGuiWindowFlags extraFlags = ImGuiWindowFlags_None) final;
 
         [[nodiscard]] virtual bool hasCloseButton() const { return true; }
         [[nodiscard]] bool shouldStoreWindowState() const override { return false; }
+    };
+
+    class View::FullScreen : public View {
+    public:
+        explicit FullScreen() : View("FullScreen", "") {}
+
+        void draw(ImGuiWindowFlags extraFlags = ImGuiWindowFlags_None) final;
     };
 
 }

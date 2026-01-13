@@ -1,6 +1,7 @@
 #pragma once
 
 #include <hex.hpp>
+#include <hex/api/imhex_api/hex_editor.hpp>
 #include <hex/api/event_manager.hpp>
 
 /* Forward declarations */
@@ -70,32 +71,8 @@ namespace hex {
     /**
      * @brief Requests the Pattern editor to run the current code
      *
-     * This is only ever used in the introduction tutorial.
-     *
-     * FIXME: the name is misleading, as for now this activates the pattern's auto-evaluation rather than a
-     *  one-off execution
      */
-    EVENT_DEF(RequestRunPatternCode);
-
-    /**
-     * @brief Request to load a pattern language file
-     *
-     * FIXME: this request is unused, as now another component is responsible for pattern file loading.
-     *  This request should be scrapped.
-     *
-     * @param path the pattern file's path
-     */
-    EVENT_DEF(RequestLoadPatternLanguageFile, std::fs::path);
-
-    /**
-     * @brief Request to save a pattern language file
-     *
-     * FIXME: this request is unused, as now another component is responsible for pattern file saving.
-     *  This request should be scrapped.
-     *
-     * @param path the pattern file's path
-     */
-    EVENT_DEF(RequestSavePatternLanguageFile, std::fs::path);
+    EVENT_DEF(RequestTriggerPatternEvaluation);
 
     /**
      * @brief Requests ImHex to open and process a file
@@ -112,5 +89,10 @@ namespace hex {
      * @param region the impacted region
      */
     EVENT_DEF(RequestAddVirtualFile, std::fs::path, std::vector<u8>, Region);
+
+    /**
+     * @brief Requests the command palette to be opened
+     */
+    EVENT_DEF(RequestOpenCommandPalette);
 
 }

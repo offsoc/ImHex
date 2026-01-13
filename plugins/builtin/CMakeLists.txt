@@ -18,7 +18,9 @@ add_imhex_plugin(
         source/content/command_palette_commands.cpp
         source/content/command_line_interface.cpp
         source/content/communication_interface.cpp
+        source/content/mcp_tools.cpp
         source/content/data_inspector.cpp
+        source/content/differing_byte_searcher.cpp
         source/content/pl_builtin_functions.cpp
         source/content/pl_builtin_types.cpp
         source/content/pl_pragmas.cpp
@@ -49,8 +51,6 @@ add_imhex_plugin(
         source/content/window_decoration.cpp
         source/content/data_information_sections.cpp
 
-        source/content/helpers/demangle.cpp
-
         source/content/data_processor_nodes/basic_nodes.cpp
         source/content/data_processor_nodes/control_nodes.cpp
         source/content/data_processor_nodes/decode_nodes.cpp
@@ -69,6 +69,7 @@ add_imhex_plugin(
         source/content/providers/base64_provider.cpp
         source/content/providers/view_provider.cpp
         source/content/providers/udp_provider.cpp
+        source/content/providers/command_provider.cpp
 
         source/content/tools/ascii_table.cpp
         source/content/tools/base_converter.cpp
@@ -96,7 +97,17 @@ add_imhex_plugin(
         source/content/tutorials/tutorials.cpp
         source/content/tutorials/introduction.cpp
 
+        source/content/popups/hex_editor/popup_hex_editor_base_address.cpp
+        source/content/popups/hex_editor/popup_hex_editor_decoded_string.cpp
+        source/content/popups/hex_editor/popup_hex_editor_fill.cpp
         source/content/popups/hex_editor/popup_hex_editor_find.cpp
+        source/content/popups/hex_editor/popup_hex_editor_goto.cpp
+        source/content/popups/hex_editor/popup_hex_editor_insert.cpp
+        source/content/popups/hex_editor/popup_hex_editor_page_size.cpp
+        source/content/popups/hex_editor/popup_hex_editor_paste_behaviour.cpp
+        source/content/popups/hex_editor/popup_hex_editor_remove.cpp
+        source/content/popups/hex_editor/popup_hex_editor_resize.cpp
+        source/content/popups/hex_editor/popup_hex_editor_select.cpp
 
         source/content/views/view_hex_editor.cpp
         source/content/views/view_pattern_editor.cpp
@@ -110,7 +121,6 @@ add_imhex_plugin(
         source/content/views/view_command_palette.cpp
         source/content/views/view_settings.cpp
         source/content/views/view_data_processor.cpp
-        source/content/views/view_constants.cpp
         source/content/views/view_store.cpp
         source/content/views/view_provider_settings.cpp
         source/content/views/view_find.cpp
@@ -119,6 +129,13 @@ add_imhex_plugin(
         source/content/views/view_achievements.cpp
         source/content/views/view_highlight_rules.cpp
         source/content/views/view_tutorials.cpp
+
+        source/content/views/fullscreen/view_fullscreen_save_editor.cpp
+        source/content/views/fullscreen/view_fullscreen_file_info.cpp
+
+        source/content/text_highlighting/pattern_language.cpp
+
+        source/content/helpers/constants.cpp
     INCLUDES
         include
 
@@ -128,7 +145,6 @@ add_imhex_plugin(
         ${JTHREAD_LIBRARIES}
         plcli
         libpl-gen
-        LLVMDemangle
 )
 
 if (WIN32)

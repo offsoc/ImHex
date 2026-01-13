@@ -1,20 +1,21 @@
 #include "content/views/view_information.hpp"
 
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/data_information.hpp>
 #include <hex/api/achievement_manager.hpp>
 #include <hex/api/project_file_manager.hpp>
 
 #include <hex/providers/provider.hpp>
-
 #include <hex/helpers/magic.hpp>
 
 #include <toasts/toast_notification.hpp>
+
+#include <nlohmann/json.hpp>
 
 namespace hex::plugin::builtin {
 
     using namespace hex::literals;
 
-    ViewInformation::ViewInformation() : View::Window("hex.builtin.view.information.name", ICON_VS_GRAPH_LINE) {
+    ViewInformation::ViewInformation() : View::Scrolling("hex.builtin.view.information.name", ICON_VS_GRAPH_LINE) {
         m_analysisData.setOnCreateCallback([](const prv::Provider *provider, AnalysisData &data) {
             data.analyzedProvider = provider;
 
@@ -66,7 +67,7 @@ namespace hex::plugin::builtin {
         }
 
         // Run analyzers for each section
-        analysis.task = TaskManager::createTask("hex.builtin.view.information.analyzing", analysis.informationSections.size(), [provider, &analysis](Task &task) {
+        analysis.task = TaskManager::createTask("hex.builtin.view.information.analyzing", analysis.informationSections.size(), [this, provider, &analysis](Task &task) {
             u32 progress = 0;
             for (const auto &section : analysis.informationSections) {
                 // Only process the section if it is enabled
@@ -83,7 +84,7 @@ namespace hex::plugin::builtin {
                         section->markValid();
                     } catch (const std::exception &e) {
                         // Show a toast with the error if the section failed to process
-                        ui::ToastError::open(hex::format("hex.builtin.view.information.error_processing_section"_lang, Lang(section->getUnlocalizedName()), e.what()));
+                        ui::ToastError::open(fmt::format("hex.builtin.view.information.error_processing_section"_lang, Lang(section->getUnlocalizedName()), e.what()));
                     }
                 }
 
@@ -91,6 +92,8 @@ namespace hex::plugin::builtin {
                 progress += 1;
                 task.update(progress);
             }
+
+            m_settingsCollapsed.get(provider) = true;
         });
     }        
 
@@ -103,7 +106,7 @@ namespace hex::plugin::builtin {
 
                 // Draw settings window
                 ImGui::BeginDisabled(analysis.task.isRunning());
-                if (ImGuiExt::BeginSubWindow("hex.ui.common.settings"_lang)) {
+                if (ImGuiExt::BeginSubWindow("hex.ui.common.settings"_lang, &m_settingsCollapsed.get(provider), m_settingsCollapsed.get(provider) ? ImVec2(0, 1) : ImVec2(0, 0))) {
                     // Create a table so we can draw global settings on the left and section specific settings on the right
                     if (ImGui::BeginTable("SettingsTable", 2, ImGuiTableFlags_BordersInner | ImGuiTableFlags_SizingStretchProp, ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
                         ImGui::TableSetupColumn("Left", ImGuiTableColumnFlags_WidthStretch, 0.3F);
@@ -151,6 +154,8 @@ namespace hex::plugin::builtin {
                 }
                 ImGuiExt::EndSubWindow();
                 ImGui::EndDisabled();
+
+                ImGui::NewLine();
 
                 if (analysis.analyzedProvider != nullptr) {
                     for (const auto &section : analysis.informationSections) {
@@ -216,8 +221,11 @@ namespace hex::plugin::builtin {
                                     section->drawContent();
                                 else if (section->isAnalyzing())
                                     ImGuiExt::TextSpinner("hex.builtin.view.information.analyzing"_lang);
-                                else
+                                else {
+                                    ImGui::BeginDisabled();
                                     ImGuiExt::TextFormattedCenteredHorizontal("hex.builtin.view.information.not_analyzed"_lang);
+                                    ImGui::EndDisabled();
+                                }
                             }
                             ImGui::EndDisabled();
                         }
@@ -225,13 +233,20 @@ namespace hex::plugin::builtin {
                         ImGui::PopStyleVar();
 
                         ImGui::PopID();
-
-                        ImGui::NewLine();
                     }
                 }
             }
         }
         ImGui::EndChild();
+    }
+
+    void ViewInformation::drawHelpText() {
+        ImGuiExt::TextFormattedWrapped("This view provides various analyses and information about the currently opened data source. "
+                                      "Use the settings panel to select which sections to analyze and the region to analyze. "
+                                      "Click the 'Analyze' button to start the analysis.");
+        ImGui::NewLine();
+        ImGuiExt::TextFormattedWrapped("The results of the analysis will be displayed in separate sections below the settings panel. "
+                                      "Each section can be enabled or disabled individually, and some sections may have additional settings available via the gear icon.");
     }
 
 }

@@ -1,10 +1,10 @@
 #pragma once
 
 #include <hex/ui/view.hpp>
-
-#include <TextEditor.h>
+#include <hex/api/imhex_api/bookmarks.hpp>
 
 #include <list>
+#include <ui/markdown.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -14,11 +14,13 @@ namespace hex::plugin::builtin {
         ~ViewBookmarks() override;
 
         void drawContent() override;
+        void drawHelpText() override;
 
     private:
         struct Bookmark {
             ImHexApi::Bookmarks::Entry entry;
             bool highlightVisible;
+            ui::Markdown commentDisplay;
         };
 
     private:

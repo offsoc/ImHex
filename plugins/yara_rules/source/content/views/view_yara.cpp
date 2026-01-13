@@ -1,6 +1,7 @@
 #include "content/views/view_yara.hpp"
 
-#include <hex/api/content_registry.hpp>
+#include <hex/api/imhex_api/hex_editor.hpp>
+#include <hex/api/content_registry/file_type_handler.hpp>
 #include <hex/api/project_file_manager.hpp>
 
 #include <hex/helpers/fs.hpp>
@@ -9,10 +10,9 @@
 #include <toasts/toast_notification.hpp>
 #include <popups/popup_file_chooser.hpp>
 
-#include <filesystem>
-
 #include <wolv/io/fs.hpp>
 #include <wolv/literals.hpp>
+#include <nlohmann/json.hpp>
 
 namespace hex::plugin::yara {
 
@@ -21,7 +21,7 @@ namespace hex::plugin::yara {
     ViewYara::ViewYara() : View::Window("hex.yara_rules.view.yara.name", ICON_VS_BUG) {
         YaraRule::init();
 
-        ContentRegistry::FileHandler::add({ ".yar", ".yara" }, [](const auto &path) {
+        ContentRegistry::FileTypeHandler::add({ ".yar", ".yara" }, [](const auto &path) {
             for (const auto &destPath : paths::Yara.write()) {
                 if (wolv::io::fs::copyFile(path, destPath / path.filename(), std::fs::copy_options::overwrite_existing)) {
                     ui::ToastInfo::open("hex.yara_rules.view.yara.rule_added"_lang);
@@ -131,19 +131,53 @@ namespace hex::plugin::yara {
     }
 
     void ViewYara::drawContent() {
-        ImGuiExt::Header("hex.yara_rules.view.yara.header.rules"_lang, true);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, 0 });
+        if (ImGuiExt::BeginSubWindow("hex.yara_rules.view.yara.header.rules"_lang, nullptr, ImVec2(0, 150_scaled))) {
+            if (ImGui::BeginTable("##rules", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+                ImGui::TableSetupColumn("##rule", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("##delete", ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_WidthFixed, ImGui::GetTextLineHeight());
 
-        if (ImGui::BeginListBox("##rules", ImVec2(-FLT_MIN, ImGui::GetTextLineHeightWithSpacing() * 5))) {
-            for (u32 i = 0; i < m_rulePaths->size(); i++) {
-                const bool selected = (*m_selectedRule == i);
-                if (ImGui::Selectable(wolv::util::toUTF8String((*m_rulePaths)[i].first).c_str(), selected)) {
-                    *m_selectedRule = i;
+                std::optional<u32> indexToErase;
+                for (u32 i = 0; i < m_rulePaths->size(); i++) {
+                    ImGui::PushID(i + 1);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Indent(5_scaled);
+                    ImGui::TextUnformatted(wolv::util::toUTF8String((*m_rulePaths)[i].first).c_str());
+                    ImGui::Unindent(5_scaled);
+
+                    ImGui::TableNextColumn();
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                    if (ImGuiExt::DimmedIconButton(ICON_VS_TRASH, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
+                        indexToErase = i;
+                    }
+                    ImGui::PopStyleVar();
+                    ImGui::PopID();
                 }
+
+                if (indexToErase.has_value()) {
+                    m_rulePaths->erase(m_rulePaths->begin() + *indexToErase);
+                }
+
+                ImGui::EndTable();
             }
-            ImGui::EndListBox();
+        }
+        ImGuiExt::EndSubWindow();
+        ImGui::PopStyleVar();
+
+        ImGui::BeginDisabled(m_rulePaths->empty());
+        if (ImGuiExt::DimmedButton("hex.yara_rules.view.yara.match"_lang))
+            this->applyRules();
+        ImGui::EndDisabled();
+
+        if (m_matcherTask.isRunning()) {
+            ImGui::SameLine(0, 20_scaled);
+            ImGuiExt::TextSpinner("hex.yara_rules.view.yara.matching"_lang);
         }
 
-        if (ImGuiExt::IconButton(ICON_VS_ADD, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetWindowSize().x - ImGui::CalcTextSize(ICON_VS_ADD).x - ImGui::GetStyle().ItemSpacing.x * 2);
+        if (ImGuiExt::DimmedIconButton(ICON_VS_ADD, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
             const auto basePaths = paths::Yara.read();
             std::vector<std::fs::path> paths;
             for (const auto &path : basePaths) {
@@ -162,63 +196,68 @@ namespace hex::plugin::yara {
             });
         }
 
-        ImGui::SameLine();
-        ImGui::BeginDisabled(*m_selectedRule >= m_rulePaths->size());
-        if (ImGuiExt::IconButton(ICON_VS_REMOVE, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
-            m_rulePaths->erase(m_rulePaths->begin() + *m_selectedRule);
-            m_selectedRule = std::min(*m_selectedRule, u32(m_rulePaths->size() - 1));
-        }
-        ImGui::EndDisabled();
-
         ImGui::NewLine();
-
-        ImGui::BeginDisabled(m_rulePaths->empty());
-        if (ImGuiExt::DimmedButton("hex.yara_rules.view.yara.match"_lang)) this->applyRules();
-        ImGui::EndDisabled();
-
-        if (m_matcherTask.isRunning()) {
-            ImGui::SameLine();
-            ImGuiExt::TextSpinner("hex.yara_rules.view.yara.matching"_lang);
-        }
-
-        ImGuiExt::Header("hex.yara_rules.view.yara.header.matches"_lang);
 
         auto matchesTableSize = ImGui::GetContentRegionAvail();
         matchesTableSize.y *= 3.75 / 5.0;
         matchesTableSize.y -= ImGui::GetTextLineHeightWithSpacing();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0, 0 });
+        if (ImGuiExt::BeginSubWindow("hex.yara_rules.view.yara.header.matches"_lang, nullptr, matchesTableSize)) {
+            if (ImGui::BeginTable("matches", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("hex.yara_rules.view.yara.matches.variable"_lang, ImGuiTableColumnFlags_None, 0.5);
+                ImGui::TableSetupColumn("hex.ui.common.address"_lang, ImGuiTableColumnFlags_None, 0.25);
+                ImGui::TableSetupColumn("hex.ui.common.size"_lang, ImGuiTableColumnFlags_None, 0.25);
 
-        if (ImGui::BeginTable("matches", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable | ImGuiTableFlags_Reorderable | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, matchesTableSize)) {
-            ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableSetupColumn("hex.yara_rules.view.yara.matches.variable"_lang, ImGuiTableColumnFlags_PreferSortAscending, 0, ImGui::GetID("variable"));
-            ImGui::TableSetupColumn("hex.ui.common.address"_lang, ImGuiTableColumnFlags_PreferSortAscending, 0, ImGui::GetID("address"));
-            ImGui::TableSetupColumn("hex.ui.common.size"_lang, ImGuiTableColumnFlags_PreferSortAscending, 0, ImGui::GetID("size"));
+                ImGui::TableHeadersRow();
 
-            ImGui::TableHeadersRow();
+                if (!m_matcherTask.isRunning()) {
+                    u32 ruleId = 1;
+                    for (const auto &rule : *m_matchedRules) {
+                        if (rule.matches.empty()) continue;
 
-            if (!m_matcherTask.isRunning()) {
-                for (const auto &rule : *m_matchedRules) {
-                    if (rule.matches.empty()) continue;
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
 
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
+                        ImGui::PushID(ruleId);
+                        ImGui::PushStyleVarX(ImGuiStyleVar_FramePadding, 0.0F);
+                        const bool open = ImGui::TreeNodeEx("##TreeNode", ImGuiTreeNodeFlags_DrawLinesToNodes | ImGuiTreeNodeFlags_SpanLabelWidth | ImGuiTreeNodeFlags_OpenOnArrow);
+                        ImGui::PopStyleVar();
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(rule.identifier.c_str());
+                        if (open) {
+                            u32 matchId = 1;
+                            for (const auto &match : rule.matches) {
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::PushID(matchId);
 
-                    if (ImGui::TreeNode(rule.identifier.c_str())) {
-                        for (const auto &match : rule.matches) {
-                            ImGui::TableNextRow();
-                            ImGui::TableNextColumn();
-                            ImGui::TextUnformatted(match.variable.c_str());
-                            ImGui::TableNextColumn();
-                            ImGui::TextUnformatted(hex::format("0x{0:08X}", match.region.getStartAddress()).c_str());
-                            ImGui::TableNextColumn();
-                            ImGui::TextUnformatted(hex::format("0x{0:08X}", match.region.getSize()).c_str());
+                                if (ImGui::Selectable("##match_selectable", false, ImGuiSelectableFlags_SpanAllColumns)) {
+                                    ImHexApi::HexEditor::setSelection(match.region);
+                                }
+
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(match.variable.c_str());
+                                ImGui::TableNextColumn();
+                                ImGui::TextUnformatted(fmt::format("0x{0:08X}", match.region.getStartAddress()).c_str());
+                                ImGui::TableNextColumn();
+                                ImGui::TextUnformatted(fmt::format("0x{0:08X}", match.region.getSize()).c_str());
+
+                                ImGui::PopID();
+                                matchId += 1;
+                            }
+                            ImGui::TreePop();
                         }
-                        ImGui::TreePop();
+                        ImGui::PopID();
+                        ruleId += 1;
                     }
                 }
-            }
 
-            ImGui::EndTable();
+                ImGui::EndTable();
+            }
         }
+        ImGuiExt::EndSubWindow();
+        ImGui::PopStyleVar();
 
         auto consoleSize = ImGui::GetContentRegionAvail();
 
@@ -283,12 +322,12 @@ namespace hex::plugin::yara {
 
                 for (YaraRule::Rule &rule : *m_matchedRules) {
                     for (auto &match : rule.matches) {
-                        auto tags = hex::format("{}", fmt::join(rule.tags, ", "));
+                        auto tags = fmt::format("{}", fmt::join(rule.tags, ", "));
                         m_highlights->insert(
                             { match.region.getStartAddress(), match.region.getEndAddress() },
-                            hex::format("rule {0}{1} {{ {2} }}",
+                            fmt::format("rule {0}{1} {{ {2} }}",
                                 rule.identifier,
-                                tags.empty() ? "" : hex::format(" : {}", tags),
+                                tags.empty() ? "" : fmt::format(" : {}", tags),
                                 match.variable
                             )
                         );
@@ -298,4 +337,13 @@ namespace hex::plugin::yara {
         });
     }
 
+    void ViewYara::drawHelpText() {
+        ImGuiExt::TextFormattedWrapped("This view allows you to apply YARA rules to the currently opened file and highlights matched regions.");
+        ImGui::NewLine();
+        ImGuiExt::TextFormattedWrapped(
+            "You can add YARA rules by clicking the + button in the top right corner of the view. "
+            "This will open a file chooser where you can select one or more YARA files to add."
+            "For further information on how to write YARA rules, please refer to its official documentation."
+        );
+    }
 }

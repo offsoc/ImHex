@@ -4,6 +4,7 @@
 
 #include <hex/ui/view.hpp>
 #include <hex/api/task_manager.hpp>
+#include <hex/api/content_registry/diffing.hpp>
 
 #include <array>
 #include <vector>
@@ -19,7 +20,7 @@ namespace hex::plugin::diffing {
 
         void drawContent() override;
         void drawAlwaysVisibleContent() override;
-        ImGuiWindowFlags getWindowFlags() const override { return ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse; }
+        void drawHelpText() override;
 
     public:
         struct Column {
@@ -35,6 +36,8 @@ namespace hex::plugin::diffing {
         std::function<std::optional<color_t>(u64, const u8*, size_t)> createCompareFunction(size_t otherIndex) const;
         void analyze(prv::Provider *providerA, prv::Provider *providerB);
 
+        void registerMenuItems();
+
         void reset();
 
     private:
@@ -42,7 +45,11 @@ namespace hex::plugin::diffing {
 
         TaskHolder m_diffTask;
         std::atomic<bool> m_analyzed = false;
+        std::atomic<bool> m_analysisInterrupted = false;
         ContentRegistry::Diffing::Algorithm *m_algorithm = nullptr;
+
+        u64 m_selectedAddress  = 0;
+        prv::Provider *m_selectedProvider = nullptr;
     };
 
 }

@@ -1,4 +1,9 @@
-#include <hex/helpers/utils.hpp>
+#include <content/helpers/capstone.hpp>
+
+#include <hex/api/localization_manager.hpp>
+
+#include <hex/ui/imgui_imhex_extensions.h>
+#include <hex/helpers/scaling.hpp>
 
 #include <pl/pattern_language.hpp>
 #include <pl/patterns/pattern.hpp>
@@ -6,10 +11,6 @@
 #include <imgui.h>
 
 #include <capstone/capstone.h>
-#include <content/helpers/disassembler.hpp>
-
-#include <hex/ui/imgui_imhex_extensions.h>
-#include <hex/api/localization_manager.hpp>
 
 namespace hex::plugin::disasm {
 
@@ -37,7 +38,7 @@ namespace hex::plugin::disasm {
 
                 size_t instructionCount = cs_disasm(capstone, data.data(), data.size(), u64(baseAddress), 0, &instructions);
                 for (size_t i = 0; i < instructionCount; i++) {
-                    disassembly.push_back({ instructions[i].address, { instructions[i].bytes, instructions[i].bytes + instructions[i].size }, hex::format("{} {}", instructions[i].mnemonic, instructions[i].op_str) });
+                    disassembly.push_back({ instructions[i].address, { instructions[i].bytes, instructions[i].bytes + instructions[i].size }, fmt::format("{} {}", instructions[i].mnemonic, instructions[i].op_str) });
                 }
                 cs_free(instructions, instructionCount);
                 cs_close(&capstone);
@@ -58,7 +59,7 @@ namespace hex::plugin::disasm {
                 ImGui::TableNextColumn();
                 std::string bytes;
                 for (auto byte : entry.bytes)
-                    bytes += hex::format("{0:02X} ", byte);
+                    bytes += fmt::format("{0:02X} ", byte);
                 ImGui::TextUnformatted(bytes.c_str());
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(entry.instruction.c_str());

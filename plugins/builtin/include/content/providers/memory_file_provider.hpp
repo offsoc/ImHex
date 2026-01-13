@@ -1,10 +1,12 @@
 #pragma once
 
+#include <fonts/vscode_icons.hpp>
 #include <hex/providers/provider.hpp>
 
 namespace hex::plugin::builtin {
 
-    class MemoryFileProvider : public hex::prv::Provider {
+    class MemoryFileProvider : public hex::prv::Provider,
+                               public prv::IProviderMenuItems {
     public:
         explicit MemoryFileProvider() = default;
         ~MemoryFileProvider() override = default;
@@ -16,7 +18,7 @@ namespace hex::plugin::builtin {
         [[nodiscard]] bool isSavable()   const override { return m_name.empty(); }
         [[nodiscard]] bool isSavableAsRecent() const override { return false; }
 
-        [[nodiscard]] bool open() override;
+        [[nodiscard]] OpenResult open() override;
         void close() override { }
 
         void readRaw(u64 offset, void *buffer, size_t size) override;
@@ -28,12 +30,15 @@ namespace hex::plugin::builtin {
         void save() override;
 
         [[nodiscard]] std::string getName() const override;
-        [[nodiscard]] std::vector<Description> getDataDescription() const override { return { }; }
 
         std::vector<MenuEntry> getMenuEntries() override;
 
         [[nodiscard]] UnlocalizedString getTypeName() const override {
             return "hex.builtin.provider.mem_file";
+        }
+
+        [[nodiscard]] const char* getIcon() const override {
+            return ICON_VS_FILE_BINARY;
         }
 
         [[nodiscard]] std::pair<Region, bool> getRegionValidity(u64 address) const override;

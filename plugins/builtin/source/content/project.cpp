@@ -4,11 +4,10 @@
 #include <wolv/utils/guards.hpp>
 #include <wolv/utils/string.hpp>
 
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/imhex_api/provider.hpp>
 #include <hex/api/project_file_manager.hpp>
 #include <hex/api/localization_manager.hpp>
 #include <hex/api/achievement_manager.hpp>
-#include <hex/api/content_registry.hpp>
 #include <hex/api/events/events_lifecycle.hpp>
 #include <hex/api/events/requests_gui.hpp>
 
@@ -24,8 +23,8 @@ namespace hex::plugin::builtin {
 
     bool load(const std::fs::path &filePath) {
         if (!wolv::io::fs::exists(filePath) || !wolv::io::fs::isRegularFile(filePath)) {
-            ui::ToastError::open(hex::format("hex.builtin.popup.error.project.load"_lang,
-                hex::format("hex.builtin.popup.error.project.load.file_not_found"_lang,
+            ui::ToastError::open(fmt::format("hex.builtin.popup.error.project.load"_lang,
+                fmt::format("hex.builtin.popup.error.project.load.file_not_found"_lang,
                     wolv::util::toUTF8String(filePath)
             )));
 
@@ -34,8 +33,8 @@ namespace hex::plugin::builtin {
 
         Tar tar(filePath, Tar::Mode::Read);
         if (!tar.isValid()) {
-            ui::ToastError::open(hex::format("hex.builtin.popup.error.project.load"_lang,
-                hex::format("hex.builtin.popup.error.project.load.invalid_tar"_lang,
+            ui::ToastError::open(fmt::format("hex.builtin.popup.error.project.load"_lang,
+                fmt::format("hex.builtin.popup.error.project.load.invalid_tar"_lang,
                     tar.getOpenErrorString()
             )));
 
@@ -43,8 +42,8 @@ namespace hex::plugin::builtin {
         }
 
         if (!tar.contains(MetadataPath)) {
-            ui::ToastError::open(hex::format("hex.builtin.popup.error.project.load"_lang,
-                hex::format("hex.builtin.popup.error.project.load.invalid_magic"_lang)
+            ui::ToastError::open(fmt::format("hex.builtin.popup.error.project.load"_lang,
+                fmt::format("hex.builtin.popup.error.project.load.invalid_magic"_lang)
             ));
 
             return false;
@@ -54,8 +53,8 @@ namespace hex::plugin::builtin {
             const auto metadataContent = tar.readVector(MetadataPath);
 
             if (!std::string(metadataContent.begin(), metadataContent.end()).starts_with(MetadataHeaderMagic)) {
-                ui::ToastError::open(hex::format("hex.builtin.popup.error.project.load"_lang,
-                    hex::format("hex.builtin.popup.error.project.load.invalid_magic"_lang)
+                ui::ToastError::open(fmt::format("hex.builtin.popup.error.project.load"_lang,
+                    fmt::format("hex.builtin.popup.error.project.load.invalid_magic"_lang)
                 ));
 
                 return false;
@@ -159,7 +158,7 @@ namespace hex::plugin::builtin {
         }
 
         {
-            const auto metadataContent = hex::format("{}\n{}", MetadataHeaderMagic, ImHexApi::System::getImHexVersion().get(false));
+            const auto metadataContent = fmt::format("{}\n{}", MetadataHeaderMagic, ImHexApi::System::getImHexVersion().get(false));
             tar.writeString(MetadataPath, metadataContent);
         }
 
@@ -171,9 +170,11 @@ namespace hex::plugin::builtin {
 
             // Request, as this puts us into a project state
             RequestUpdateWindowTitle::post();
-        }
 
-        AchievementManager::unlockAchievement("hex.builtin.achievement.starting_out", "hex.builtin.achievement.starting_out.save_project.name");
+            AchievementManager::unlockAchievement("hex.builtin.achievement.starting_out", "hex.builtin.achievement.starting_out.save_project.name");
+
+            EventProjectSaved::post();
+        }
 
         return result;
     }

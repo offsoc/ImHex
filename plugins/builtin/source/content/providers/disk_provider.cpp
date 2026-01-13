@@ -8,6 +8,7 @@
 #include <hex/helpers/logger.hpp>
 #include <hex/helpers/fmt.hpp>
 #include <hex/helpers/utils.hpp>
+#include <hex/helpers/scaling.hpp>
 #include <hex/ui/imgui_imhex_extensions.h>
 
 #include <wolv/utils/string.hpp>
@@ -156,7 +157,8 @@ namespace hex::plugin::builtin {
     }
 #endif
 
-    bool DiskProvider::open() {
+    prv::Provider::OpenResult DiskProvider::open() {
+        OpenResult result;
         m_readable = true;
         m_writable = true;
 
@@ -170,8 +172,7 @@ namespace hex::plugin::builtin {
                 m_writable   = false;
 
                 if (m_diskHandle == INVALID_HANDLE_VALUE) {
-                    this->setErrorMessage(hex::formatSystemError(::GetLastError()));
-                    return false;
+                    return OpenResult::failure(hex::formatSystemError(::GetLastError()));
                 }
             }
 
@@ -193,12 +194,12 @@ namespace hex::plugin::builtin {
             }
 
             if (m_diskHandle == nullptr || m_diskHandle == INVALID_HANDLE_VALUE) {
-                this->setErrorMessage(hex::formatSystemError(::GetLastError()));
+                auto error = ::GetLastError();
                 m_readable   = false;
                 m_diskHandle = nullptr;
                 CloseHandle(m_diskHandle);
 
-                return false;
+                return OpenResult::failure(hex::formatSystemError(error));
             }
 
         #else
@@ -207,17 +208,14 @@ namespace hex::plugin::builtin {
 
             m_diskHandle = ::open(path.c_str(), O_RDWR);
             if (m_diskHandle == -1) {
-                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_rw"_lang, path, formatSystemError(errno)));
-                log::warn(this->getErrorMessage());
+                result = OpenResult::warning(fmt::format("hex.builtin.provider.disk.error.read_rw"_lang, path, formatSystemError(errno)));
                 m_diskHandle = ::open(path.c_str(), O_RDONLY);
                 m_writable   = false;
             }
 
             if (m_diskHandle == -1) {
-                this->setErrorMessage(hex::format("hex.builtin.provider.disk.error.read_ro"_lang, path, formatSystemError(errno)));
-                log::warn(this->getErrorMessage());
                 m_readable = false;
-                return false;
+                return OpenResult::failure(fmt::format("hex.builtin.provider.disk.error.read_ro"_lang, path, formatSystemError(errno)));
             }
 
             u64 diskSize = 0;
@@ -227,7 +225,7 @@ namespace hex::plugin::builtin {
 
         #endif
 
-        return true;
+        return result;
     }
 
     void DiskProvider::close() {
@@ -442,7 +440,7 @@ namespace hex::plugin::builtin {
         for (char i = 0; i < 26; i++) {
             if (drives[i]) {
                 char letter = 'A' + i;
-                m_availableDrives.insert({ hex::format(R"(\\.\{:c}:)", letter), hex::format(R"({:c}:/)", letter) });
+                m_availableDrives.insert({ fmt::format(R"(\\.\{:c}:)", letter), fmt::format(R"({:c}:/)", letter) });
             }
         }
 
@@ -523,7 +521,7 @@ namespace hex::plugin::builtin {
         address -= this->getBaseAddress();
 
         if (address < this->getActualSize())
-            return { Region { this->getBaseAddress() + address, this->getActualSize() - address }, true };
+            return { Region { .address=this->getBaseAddress() + address, .size=this->getActualSize() - address }, true };
         else
             return { Region::Invalid(), false };
     }

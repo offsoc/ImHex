@@ -1,5 +1,7 @@
-#include <hex/api/imhex_api.hpp>
-#include <hex/api/content_registry.hpp>
+#include <algorithm>
+#include <hex/api/imhex_api/provider.hpp>
+#include <hex/api/content_registry/pattern_language.hpp>
+#include <hex/api/content_registry/data_processor.hpp>
 #include <hex/api/achievement_manager.hpp>
 #include <hex/api/events/events_interaction.hpp>
 
@@ -7,10 +9,13 @@
 #include <hex/data_processor/node.hpp>
 #include <hex/helpers/utils.hpp>
 
+#include <numeric>
 #include <wolv/utils/core.hpp>
 
 #include <content/helpers/diagrams.hpp>
 #include <pl/patterns/pattern.hpp>
+
+#include <nlohmann/json.hpp>
 
 namespace hex::plugin::builtin {
 
@@ -22,10 +27,14 @@ namespace hex::plugin::builtin {
             const auto &address = u64(this->getIntegerOnInput(0));
             const auto &size    = u64(this->getIntegerOnInput(1));
 
+            const auto provider = ImHexApi::Provider::get();
+            if (address + size > provider->getActualSize())
+                throwNodeError("Read exceeds file size");
+
             std::vector<u8> data;
             data.resize(size);
 
-            ImHexApi::Provider::get()->readRaw(address, data.data(), size);
+            provider->readRaw(address, data.data(), size);
 
             this->setBufferOnOutput(2, data);
         }
@@ -167,7 +176,7 @@ namespace hex::plugin::builtin {
             const auto &inputB = this->getBufferOnInput(1);
 
             auto output = inputA;
-            std::copy(inputB.begin(), inputB.end(), std::back_inserter(output));
+            std::ranges::copy(inputB, std::back_inserter(output));
 
             this->setBufferOnOutput(2, output);
         }
@@ -205,7 +214,7 @@ namespace hex::plugin::builtin {
             output.resize(buffer.size() * count);
 
             for (u32 i = 0; i < count; i++)
-                std::copy(buffer.begin(), buffer.end(), output.begin() + buffer.size() * i);
+                std::ranges::copy(buffer, output.begin() + buffer.size() * i);
 
             this->setBufferOnOutput(2, output);
         }
@@ -226,7 +235,7 @@ namespace hex::plugin::builtin {
             if (address + patch.size() > buffer.size())
                 buffer.resize(address + patch.size());
 
-            std::copy(patch.begin(), patch.end(), buffer.begin() + address);
+            std::ranges::copy(patch, buffer.begin() + address);
 
             this->setBufferOnOutput(3, buffer);
         }
@@ -341,9 +350,11 @@ namespace hex::plugin::builtin {
 
             const size_t requiredBytes = width * height * 4;
             if (requiredBytes > rawData.size())
-                throwNodeError(hex::format("Image requires at least {} bytes of data, but only {} bytes are available", requiredBytes, rawData.size()));
+                throwNodeError(fmt::format("Image requires at least {} bytes of data, but only {} bytes are available", requiredBytes, rawData.size()));
 
-            m_data = rawData;
+            m_data.clear();
+            m_data.resize(requiredBytes);
+            std::copy_n(rawData.data(), requiredBytes, m_data.data());
             m_width = width;
             m_height = height;
             m_texture.reset();
@@ -373,11 +384,11 @@ namespace hex::plugin::builtin {
             if (ImPlot::BeginPlot("##distribution", viewSize, ImPlotFlags_NoLegend | ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect)) {
                 ImPlot::SetupAxes("Address", "Count", ImPlotAxisFlags_Lock, ImPlotAxisFlags_Lock);
                 ImPlot::SetupAxisScale(ImAxis_Y1, ImPlotScale_Log10);
-                ImPlot::SetupAxesLimits(0, 256, 1, double(*std::max_element(m_counts.begin(), m_counts.end())) * 1.1F, ImGuiCond_Always);
+                ImPlot::SetupAxesLimits(0, 256, 1, double(*std::ranges::max_element(m_counts)) * 1.1F, ImGuiCond_Always);
 
                 static auto x = [] {
                     std::array<ImU64, 256> result { 0 };
-                    std::iota(result.begin(), result.end(), 0);
+                    std::iota(result.begin(), result.end(), 0); // NOLINT: std::ranges::iota not available on some platforms
                     return result;
                 }();
 
@@ -430,7 +441,7 @@ namespace hex::plugin::builtin {
                     }
                 }, outVars.at(m_name));
             } else {
-                throwNodeError(hex::format("Out variable '{}' has not been defined!", m_name));
+                throwNodeError(fmt::format("Out variable '{}' has not been defined!", m_name));
             }
         }
 
@@ -454,37 +465,37 @@ namespace hex::plugin::builtin {
 
         void process() override {
             auto data = this->getBufferOnInput(0);
-            std::reverse(data.begin(), data.end());
+            std::ranges::reverse(data);
             this->setBufferOnOutput(1, data);
         }
 
     };
 
     void registerOtherDataProcessorNodes() {
-        ContentRegistry::DataProcessorNode::add<NodeReadData>("hex.builtin.nodes.data_access", "hex.builtin.nodes.data_access.read");
-        ContentRegistry::DataProcessorNode::add<NodeWriteData>("hex.builtin.nodes.data_access", "hex.builtin.nodes.data_access.write");
-        ContentRegistry::DataProcessorNode::add<NodeDataSize>("hex.builtin.nodes.data_access", "hex.builtin.nodes.data_access.size");
-        ContentRegistry::DataProcessorNode::add<NodeDataSelection>("hex.builtin.nodes.data_access", "hex.builtin.nodes.data_access.selection");
+        ContentRegistry::DataProcessor::add<NodeReadData>("hex.builtin.nodes.data_access", "hex.builtin.nodes.data_access.read");
+        ContentRegistry::DataProcessor::add<NodeWriteData>("hex.builtin.nodes.data_access", "hex.builtin.nodes.data_access.write");
+        ContentRegistry::DataProcessor::add<NodeDataSize>("hex.builtin.nodes.data_access", "hex.builtin.nodes.data_access.size");
+        ContentRegistry::DataProcessor::add<NodeDataSelection>("hex.builtin.nodes.data_access", "hex.builtin.nodes.data_access.selection");
 
-        ContentRegistry::DataProcessorNode::add<NodeCastIntegerToBuffer>("hex.builtin.nodes.casting", "hex.builtin.nodes.casting.int_to_buffer");
-        ContentRegistry::DataProcessorNode::add<NodeCastBufferToInteger>("hex.builtin.nodes.casting", "hex.builtin.nodes.casting.buffer_to_int");
-        ContentRegistry::DataProcessorNode::add<NodeCastFloatToBuffer>("hex.builtin.nodes.casting", "hex.builtin.nodes.casting.float_to_buffer");
-        ContentRegistry::DataProcessorNode::add<NodeCastBufferToFloat>("hex.builtin.nodes.casting", "hex.builtin.nodes.casting.buffer_to_float");
+        ContentRegistry::DataProcessor::add<NodeCastIntegerToBuffer>("hex.builtin.nodes.casting", "hex.builtin.nodes.casting.int_to_buffer");
+        ContentRegistry::DataProcessor::add<NodeCastBufferToInteger>("hex.builtin.nodes.casting", "hex.builtin.nodes.casting.buffer_to_int");
+        ContentRegistry::DataProcessor::add<NodeCastFloatToBuffer>("hex.builtin.nodes.casting", "hex.builtin.nodes.casting.float_to_buffer");
+        ContentRegistry::DataProcessor::add<NodeCastBufferToFloat>("hex.builtin.nodes.casting", "hex.builtin.nodes.casting.buffer_to_float");
 
-        ContentRegistry::DataProcessorNode::add<NodeBufferCombine>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.combine");
-        ContentRegistry::DataProcessorNode::add<NodeBufferSlice>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.slice");
-        ContentRegistry::DataProcessorNode::add<NodeBufferRepeat>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.repeat");
-        ContentRegistry::DataProcessorNode::add<NodeBufferPatch>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.patch");
-        ContentRegistry::DataProcessorNode::add<NodeBufferSize>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.size");
-        ContentRegistry::DataProcessorNode::add<NodeBufferByteSwap>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.byte_swap");
+        ContentRegistry::DataProcessor::add<NodeBufferCombine>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.combine");
+        ContentRegistry::DataProcessor::add<NodeBufferSlice>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.slice");
+        ContentRegistry::DataProcessor::add<NodeBufferRepeat>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.repeat");
+        ContentRegistry::DataProcessor::add<NodeBufferPatch>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.patch");
+        ContentRegistry::DataProcessor::add<NodeBufferSize>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.size");
+        ContentRegistry::DataProcessor::add<NodeBufferByteSwap>("hex.builtin.nodes.buffer", "hex.builtin.nodes.buffer.byte_swap");
 
-        ContentRegistry::DataProcessorNode::add<NodeVisualizerDigram>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.digram");
-        ContentRegistry::DataProcessorNode::add<NodeVisualizerLayeredDistribution>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.layered_dist");
-        ContentRegistry::DataProcessorNode::add<NodeVisualizerImage>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.image");
-        ContentRegistry::DataProcessorNode::add<NodeVisualizerImageRGBA>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.image_rgba");
-        ContentRegistry::DataProcessorNode::add<NodeVisualizerByteDistribution>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.byte_distribution");
+        ContentRegistry::DataProcessor::add<NodeVisualizerDigram>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.digram");
+        ContentRegistry::DataProcessor::add<NodeVisualizerLayeredDistribution>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.layered_dist");
+        ContentRegistry::DataProcessor::add<NodeVisualizerImage>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.image");
+        ContentRegistry::DataProcessor::add<NodeVisualizerImageRGBA>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.image_rgba");
+        ContentRegistry::DataProcessor::add<NodeVisualizerByteDistribution>("hex.builtin.nodes.visualizer", "hex.builtin.nodes.visualizer.byte_distribution");
 
-        ContentRegistry::DataProcessorNode::add<NodePatternLanguageOutVariable>("hex.builtin.nodes.pattern_language", "hex.builtin.nodes.pattern_language.out_var");
+        ContentRegistry::DataProcessor::add<NodePatternLanguageOutVariable>("hex.builtin.nodes.pattern_language", "hex.builtin.nodes.pattern_language.out_var");
     }
 
 }

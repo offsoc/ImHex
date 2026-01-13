@@ -1,5 +1,8 @@
 #if defined(OS_MACOS)
 
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
     #include <CoreFoundation/CFBundle.h>
     #include <ApplicationServices/ApplicationServices.h>
     #include <Foundation/NSUserDefaults.h>
@@ -18,6 +21,7 @@
     #import <Cocoa/Cocoa.h>
     #import <Foundation/Foundation.h>
     #import <AppleScriptObjC/AppleScriptObjC.h>
+    #import <UserNotifications/UserNotifications.h>
 
     #include <hex/helpers/keys.hpp>
 
@@ -69,6 +73,49 @@
             cocoaWindow.titlebarAppearsTransparent = YES;
             cocoaWindow.styleMask |= NSWindowStyleMaskFullSizeContentView;
 
+            // Setup liquid glass background effect
+            {
+                NSView* glfwContentView = [cocoaWindow contentView];
+
+                NSOpenGLContext* context = [NSOpenGLContext currentContext];
+                if (!context) {
+                    glfwMakeContextCurrent(window);
+                    context = [NSOpenGLContext currentContext];
+                }
+
+                GLint opaque = 0;
+                [context setValues:&opaque forParameter:NSOpenGLCPSurfaceOpacity];
+                [context update];
+
+                NSView* containerView = [[NSView alloc] initWithFrame:[glfwContentView frame]];
+                containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                [containerView setWantsLayer:YES];
+
+                Class glassEffectClass = NSClassFromString(@"NSGlassEffectView");
+                NSView* effectView = nil;
+                if (glassEffectClass) {
+                    // Use the new liquid glass effect
+                    effectView = [[glassEffectClass alloc] initWithFrame:[containerView bounds]];
+                } else {
+                    // Fall back to NSVisualEffectView for older systems
+                    NSVisualEffectView* visualEffectView = [[NSVisualEffectView alloc] initWithFrame:[containerView bounds]];
+                    visualEffectView.material = NSVisualEffectMaterialHUDWindow;
+                    visualEffectView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+                    visualEffectView.state = NSVisualEffectStateActive;
+                    effectView = visualEffectView;
+                }
+
+                effectView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+                [containerView addSubview:effectView];
+
+                [glfwContentView removeFromSuperview];
+                glfwContentView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                [containerView addSubview:glfwContentView];
+
+                [cocoaWindow setContentView:containerView];
+            }
+
             [cocoaWindow setOpaque:NO];
             [cocoaWindow setHasShadow:YES];
             [cocoaWindow setBackgroundColor:[NSColor colorWithWhite: 0 alpha: 0.001f]];
@@ -91,16 +138,23 @@
         for (CFIndex i = 0; i < count; i++) {
             CFStringRef fontName = (CFStringRef)CFArrayGetValueAtIndex(fontDescriptors, i);
 
-            // Get font path
-            CFDictionaryRef attributes = (__bridge CFDictionaryRef)@{ (__bridge NSString *)kCTFontNameAttribute : (__bridge NSString *)fontName };
+            // Get font path - skip fonts without valid URLs
+            CFDictionaryRef attributes = (__bridge CFDictionaryRef)@{ (__bridge NSString *)kCTFontFamilyNameAttribute : (__bridge NSString *)fontName };
             CTFontDescriptorRef descriptor = CTFontDescriptorCreateWithAttributes(attributes);
             CFURLRef fontURL = CTFontDescriptorCopyAttribute(descriptor, kCTFontURLAttribute);
-            CFStringRef fontPath = CFURLCopyFileSystemPath(fontURL, kCFURLPOSIXPathStyle);
 
-            registerFont([(__bridge NSString *)fontName UTF8String], [(__bridge NSString *)fontPath UTF8String]);
+            if (fontURL != NULL) {
+                CFStringRef fontPath = CFURLCopyFileSystemPath(fontURL, kCFURLPOSIXPathStyle);
+
+                if (fontPath != NULL) {
+                    registerFont([(__bridge NSString *)fontName UTF8String], [(__bridge NSString *)fontPath UTF8String]);
+                    CFRelease(fontPath);
+                }
+
+                CFRelease(fontURL);
+            }
 
             CFRelease(descriptor);
-            CFRelease(fontURL);
         }
 
         CFRelease(fontDescriptors);
@@ -355,5 +409,71 @@
             default:                break;
         }
     }
+
+
+    static bool isRunningInAppBundle(void) {
+        NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+        return [bundlePath.pathExtension.lowercaseString isEqualToString:@"app"];
+    }
+
+    @interface NotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
+    @end
+
+    @implementation NotificationDelegate
+
+    - (void)userNotificationCenter:(UNUserNotificationCenter *)center
+           willPresentNotification:(UNNotification *)notification
+             withCompletionHandler:(void (^)(UNNotificationPresentationOptions options))completionHandler {
+        if (@available(macOS 11.0, *)) {
+            completionHandler(UNNotificationPresentationOptionBanner |
+                              UNNotificationPresentationOptionSound |
+                              UNNotificationPresentationOptionList);
+        } else {
+            // For macOS 10.15 and earlier
+            completionHandler(UNNotificationPresentationOptionAlert |
+                              UNNotificationPresentationOptionSound);
+        }
+    }
+
+    @end
+
+    void toastMessageMacos(const char *title, const char *message) {
+        @autoreleasepool {
+            // Only show notification if we're inside a bundle
+            if (!isRunningInAppBundle()) {
+                return;
+            }
+
+            NSString *nsTitle = [NSString stringWithUTF8String:title];
+            NSString *nsMessage = [NSString stringWithUTF8String:message];
+
+            UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+
+            // Request permission if needed
+            [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+                                  completionHandler:^(BOOL granted, NSError * _Nullable error) {
+
+                (void)error;
+                if (!granted) return;
+
+                UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+                content.title = nsTitle;
+                content.body = nsMessage;
+                content.sound = [UNNotificationSound defaultSound];
+
+                // Show notification immediately
+                UNTimeIntervalNotificationTrigger *trigger = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
+
+                NSString *identifier = [[NSUUID UUID] UUIDString];
+                UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:identifier
+                                                                                      content:content
+                                                                                      trigger:trigger];
+
+                [center addNotificationRequest:request withCompletionHandler:nil];
+            }];
+        }
+    }
+
+    #pragma clang diagnostic pop
 
 #endif

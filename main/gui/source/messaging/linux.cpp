@@ -1,13 +1,14 @@
 #if defined(OS_LINUX)
 
-#include <stdexcept>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <unistd.h>
 
 #include <hex/helpers/logger.hpp>
 #include <hex/api/events/events_lifecycle.hpp>
 
 #include "messaging.hpp"
+#include <jthread.hpp>
 
 namespace hex::messaging {
 
@@ -23,7 +24,7 @@ namespace hex::messaging {
 
         fullEventData.insert(fullEventData.end(), args.begin(), args.end());
 
-        u8 *data = &fullEventData[0];
+        u8 *data = fullEventData.data();
         auto dataSize = fullEventData.size();
 
         int fifo = open(CommunicationPipePath, O_WRONLY);

@@ -2,9 +2,13 @@
 
 #include <cstring>
 
+#include <hex/api/imhex_api/hex_editor.hpp>
 #include <hex/api/localization_manager.hpp>
-#include <hex/helpers/utils.hpp>
 #include <hex/helpers/fmt.hpp>
+#include <hex/helpers/logger.hpp>
+#include <hex/helpers/scaling.hpp>
+#include <hex/helpers/utils.hpp>
+#include <hex/ui/imgui_imhex_extensions.h>
 
 #include <nlohmann/json.hpp>
 
@@ -39,7 +43,7 @@ namespace hex::plugin::builtin {
             u16 address = 0x0000;
             std::vector<u8> data;
 
-            enum class RecordType {
+            enum class RecordType: u8 {
                 Data                    = 0x00,
                 EndOfFile               = 0x01,
                 ExtendedSegmentAddress  = 0x02,
@@ -102,7 +106,7 @@ namespace hex::plugin::builtin {
                     if (!data.empty() && checksum != 0x00)
                         throw std::runtime_error("Checksum mismatch");
 
-                    while (std::isspace(string[offset]) && offset < string.length())
+                    while (offset < string.length() && std::isspace(string[offset]))
                         offset++;
 
                     // Construct region
@@ -145,7 +149,7 @@ namespace hex::plugin::builtin {
                         }
                     }
 
-                    while (std::isspace(string[offset]) && offset < string.length())
+                    while (offset < string.length() && std::isspace(string[offset]))
                         offset++;
                 }
 
@@ -161,11 +165,11 @@ namespace hex::plugin::builtin {
     void IntelHexProvider::setBaseAddress(u64 address) {
         auto oldBase = this->getBaseAddress();
 
-        auto regions = m_data.overlapping({ oldBase, oldBase + this->getActualSize() });
+        auto regions = m_data.overlapping({ .start=oldBase, .end=oldBase + this->getActualSize() });
 
         decltype(m_data) newIntervals;
         for (auto &[interval, data] : regions) {
-            newIntervals.insert({ interval.start - oldBase + address, interval.end - oldBase + address }, *data);
+            newIntervals.insert({ .start=interval.start - oldBase + address, .end=interval.end - oldBase + address }, *data);
         }
         m_data = newIntervals;
 
@@ -173,7 +177,7 @@ namespace hex::plugin::builtin {
     }
 
     void IntelHexProvider::readRaw(u64 offset, void *buffer, size_t size) {
-        auto intervals = m_data.overlapping({ offset, (offset + size) - 1 });
+        auto intervals = m_data.overlapping({ .start=offset, .end=(offset + size) - 1 });
 
         std::memset(buffer, 0x00, size);
         auto bytes = static_cast<u8*>(buffer);
@@ -194,32 +198,66 @@ namespace hex::plugin::builtin {
         return m_dataSize;
     }
 
-    bool IntelHexProvider::open() {
-        auto file = wolv::io::File(m_sourceFilePath, wolv::io::File::Mode::Read);
-        if (!file.isValid()) {
-            this->setErrorMessage(hex::format("hex.builtin.provider.file.error.open"_lang, m_sourceFilePath.string(), formatSystemError(errno)));
-            return false;
-        }
+    void IntelHexProvider::processMemoryRegions(wolv::util::Expected<std::map<u64, std::vector<u8>>, std::string> data) {
+        std::optional<u64> maxAddress;
+        bool firstAddress = true;
+        u64 regionStartAddr = 0;
+        u32 prevAddrEnd = 0;
+        u32 blockIdx = 0;
+        u64 blockSize = 0;
 
-        auto data = intel_hex::parseIntelHex(file.readString());
-        if (!data.has_value()) {
-            this->setErrorMessage(data.error());
-            return false;
-        }
-
-        u64 maxAddress = 0x00;
         for (auto &[address, bytes] : data.value()) {
             auto endAddress = (address + bytes.size()) - 1;
-            m_data.emplace({ address, endAddress }, std::move(bytes));
+            if (firstAddress) {
+                regionStartAddr = address;
+                firstAddress = false;
+            } else {
+                if (address > (prevAddrEnd + 1)) {
+                    m_memoryRegions.emplace_back(Region(regionStartAddr, blockSize), fmt::format("Block {}", blockIdx));
+                    regionStartAddr = address;
+                    blockSize = 0;
+                    blockIdx++;
+                }
+            }
+            blockSize += bytes.size();
+            prevAddrEnd = endAddress;
 
+            m_data.emplace({ .start=address, .end=endAddress }, std::move(bytes));
             if (endAddress > maxAddress)
                 maxAddress = endAddress;
         }
 
-        m_dataSize = maxAddress + 1;
+        if (blockSize > 0) {
+            m_memoryRegions.emplace_back(Region(regionStartAddr, blockSize), fmt::format("Block {}", blockIdx));
+        }
+
+        if (maxAddress.has_value())
+            m_dataSize = *maxAddress + 1;
+        else
+            m_dataSize = 0x00;
+
         m_dataValid = true;
 
-        return true;
+        TaskManager::doLater([this] {
+            // Jump to first region after loading all regions
+            auto [region, _] = m_memoryRegions.front();
+            ImHexApi::HexEditor::setSelection(region.getStartAddress(), 1);
+        });
+    }
+
+    prv::Provider::OpenResult IntelHexProvider::open() {
+        auto file = wolv::io::File(m_sourceFilePath, wolv::io::File::Mode::Read);
+        if (!file.isValid()) {
+            return OpenResult::failure(fmt::format("hex.builtin.provider.file.error.open"_lang, m_sourceFilePath.string(), formatSystemError(errno)));
+        }
+
+        auto data = intel_hex::parseIntelHex(file.readString());
+        if (!data.has_value()) {
+            return OpenResult::failure(data.error());
+        }
+        processMemoryRegions(data);
+
+        return {};
     }
 
     void IntelHexProvider::close() {
@@ -227,7 +265,7 @@ namespace hex::plugin::builtin {
     }
 
     [[nodiscard]] std::string IntelHexProvider::getName() const {
-        return hex::format("hex.builtin.provider.intel_hex.name"_lang, wolv::util::toUTF8String(m_sourceFilePath.filename()));
+        return fmt::format("hex.builtin.provider.intel_hex.name"_lang, wolv::util::toUTF8String(m_sourceFilePath.filename()));
     }
 
     [[nodiscard]] std::vector<IntelHexProvider::Description> IntelHexProvider::getDataDescription() const {
@@ -267,18 +305,74 @@ namespace hex::plugin::builtin {
     }
 
     std::pair<Region, bool> IntelHexProvider::getRegionValidity(u64 address) const {
-        auto intervals = m_data.overlapping({ address, address });
+        auto intervals = m_data.overlapping({ .start=address, .end=address });
         if (intervals.empty()) {
             return { Region(address, 1), false };
         }
 
-        decltype(m_data)::Interval closestInterval = { 0, 0 };
+        decltype(m_data)::Interval closestInterval = { .start=0, .end=0 };
         for (const auto &[interval, data] : intervals) {
             if (interval.start <= closestInterval.end)
                 closestInterval = interval;
         }
 
-        return { Region { closestInterval.start, (closestInterval.end - closestInterval.start) + 1}, Provider::getRegionValidity(address).second };
+        return { Region { .address=closestInterval.start, .size=(closestInterval.end - closestInterval.start) + 1}, Provider::getRegionValidity(address).second };
+    }
+
+    bool IntelHexProvider::memoryRegionFilter(const std::string& search, const MemoryRegion& memoryRegion) {
+        std::string startAddr = fmt::format("{:#x}", memoryRegion.region.getStartAddress());
+        std::string endAddr = fmt::format("{:#x}", memoryRegion.region.getEndAddress());
+
+        return hex::containsIgnoreCase(startAddr, search) ||
+            hex::containsIgnoreCase(endAddr, search);
+    }
+
+    void IntelHexProvider::drawSidebarInterface() {
+        ImGuiExt::Header("hex.builtin.provider.process_memory.memory_regions"_lang, true);
+
+        auto availableX = ImGui::GetContentRegionAvail().x;
+        ImGui::PushItemWidth(availableX);
+        const auto &filtered = m_regionSearchWidget.draw(m_memoryRegions);
+        ImGui::PopItemWidth();
+
+        auto availableY = ImGui::GetContentRegionAvail().y;
+        if (ImGui::BeginTable("##module_table", 3,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_ScrollY,
+                ImVec2(availableX, availableY))) {
+            ImGui::TableSetupColumn("hex.ui.common.region"_lang);
+            ImGui::TableSetupColumn("hex.ui.common.size"_lang);
+            ImGui::TableSetupColumn("hex.ui.common.name"_lang);
+            ImGui::TableSetupScrollFreeze(0, 1);
+
+            ImGui::TableHeadersRow();
+
+            for (const auto &memoryRegion : filtered) {
+                ImGui::PushID((const void*) &memoryRegion);
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+
+                ImGuiExt::TextFormatted("0x{0:08X} - 0x{1:08X}",
+                        memoryRegion->region.getStartAddress(), memoryRegion->region.getEndAddress());
+
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(hex::toByteString(memoryRegion->region.getSize()).c_str());
+
+
+                ImGui::TableNextColumn();
+                if (ImGui::Selectable(memoryRegion->name.c_str(),
+                        false,
+                        ImGuiSelectableFlags_SpanAllColumns)) {
+                  ImHexApi::HexEditor::setSelection(
+                      memoryRegion->region.getStartAddress(), 1);
+                }
+
+                ImGui::PopID();
+            }
+
+            ImGui::EndTable();
+        }
     }
 
     void IntelHexProvider::loadSettings(const nlohmann::json &settings) {

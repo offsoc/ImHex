@@ -1,10 +1,15 @@
-#include <hex/api/imhex_api.hpp>
-#include <hex/api/content_registry.hpp>
+#include <algorithm>
+#include <hex/api/imhex_api/system.hpp>
+#include <hex/api/content_registry/settings.hpp>
+#include <hex/api/content_registry/user_interface.hpp>
+#include <hex/api/content_registry/experiments.hpp>
+#include <hex/api/content_registry/views.hpp>
 #include <hex/api/localization_manager.hpp>
 #include <hex/api/theme_manager.hpp>
 #include <hex/api/shortcut_manager.hpp>
 #include <hex/api/events/events_lifecycle.hpp>
 #include <hex/api/layout_manager.hpp>
+#include <hex/ui/view.hpp>
 
 #include <hex/helpers/http_requests.hpp>
 #include <hex/helpers/utils.hpp>
@@ -19,6 +24,8 @@
 #include <nlohmann/json.hpp>
 
 #include <utility>
+#include <hex/api/plugin_manager.hpp>
+#include <hex/helpers/debugging.hpp>
 #include <romfs/romfs.hpp>
 
 #if defined(OS_WEB)
@@ -75,11 +82,7 @@ namespace hex::plugin::builtin {
                         return "%d FPS";
                 }();
 
-                if (ImGui::SliderInt(name.data(), &m_value, 14, 201, format.c_str(), ImGuiSliderFlags_AlwaysClamp)) {
-                    return true;
-                }
-
-                return false;
+                return ImGui::SliderInt(name.data(), &m_value, 14, 201, format.c_str(), ImGuiSliderFlags_AlwaysClamp);
             }
 
             void load(const nlohmann::json &data) override {
@@ -100,7 +103,7 @@ namespace hex::plugin::builtin {
             bool draw(const std::string &) override {
                 bool result = false;
 
-                if (!ImGui::BeginListBox("##UserFolders", ImVec2(-40_scaled, 280_scaled))) {
+                if (!ImGui::BeginListBox("##UserFolders", ImVec2(-(ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.x * 2), 300_scaled))) {
                     return false;
                 } else {
                     for (size_t n = 0; n < m_paths.size(); n++) {
@@ -121,9 +124,9 @@ namespace hex::plugin::builtin {
                 ImGui::SameLine();
                 ImGui::BeginGroup();
 
-                if (ImGuiExt::IconButton(ICON_VS_NEW_FOLDER, ImGui::GetStyleColorVec4(ImGuiCol_Text), ImVec2(30, 30))) {
+                if (ImGuiExt::DimmedIconButton(ICON_VS_NEW_FOLDER, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
                     fs::openFileBrowser(fs::DialogMode::Folder, {}, [&](const std::fs::path &path) {
-                        if (std::find(m_paths.begin(), m_paths.end(), path) == m_paths.end()) {
+                        if (std::ranges::find(m_paths, path) == m_paths.end()) {
                             m_paths.emplace_back(path);
                             ImHexApi::System::setAdditionalFolderPaths(m_paths);
 
@@ -133,7 +136,7 @@ namespace hex::plugin::builtin {
                 }
                 ImGuiExt::InfoTooltip("hex.builtin.setting.folders.add_folder"_lang);
 
-                if (ImGuiExt::IconButton(ICON_VS_REMOVE_CLOSE, ImGui::GetStyleColorVec4(ImGuiCol_Text), ImVec2(30, 30))) {
+                if (ImGuiExt::DimmedIconButton(ICON_VS_REMOVE, ImGui::GetStyleColorVec4(ImGuiCol_Text))) {
                     if (!m_paths.empty()) {
                         m_paths.erase(std::next(m_paths.begin(), m_itemIndex));
                         ImHexApi::System::setAdditionalFolderPaths(m_paths);
@@ -164,7 +167,8 @@ namespace hex::plugin::builtin {
             nlohmann::json store() override {
                 std::vector<std::string> pathStrings;
 
-                for (const auto &path : m_paths) {
+                pathStrings.reserve(m_paths.size());
+for (const auto &path : m_paths) {
                     pathStrings.push_back(wolv::io::fs::toNormalizedPathString(path));
                 }
 
@@ -181,7 +185,7 @@ namespace hex::plugin::builtin {
             bool draw(const std::string &name) override {
                 auto format = [this]() -> std::string {
                     if (m_value == 0)
-                        return hex::format("{} (x{:.1f})", "hex.builtin.setting.interface.scaling.native"_lang, ImHexApi::System::getNativeScale());
+                        return fmt::format("{} (x{:.1f})", "hex.builtin.setting.interface.scaling.native"_lang, ImHexApi::System::getNativeScale());
                     else
                         return "x%.1f";
                 }();
@@ -205,7 +209,7 @@ namespace hex::plugin::builtin {
                 return m_value;
             }
 
-            float getValue() const {
+            [[nodiscard]] float getValue() const {
                 return m_value;
             }
 
@@ -221,16 +225,12 @@ namespace hex::plugin::builtin {
                     if (value == 0)
                         return "hex.ui.common.off"_lang;
                     else if (value < 60)
-                        return hex::format("hex.builtin.setting.general.auto_backup_time.format.simple"_lang, value);
+                        return fmt::format("hex.builtin.setting.general.backups.auto_backup_time.format.simple"_lang, value);
                     else
-                        return hex::format("hex.builtin.setting.general.auto_backup_time.format.extended"_lang, value / 60, value % 60);
+                        return fmt::format("hex.builtin.setting.general.backups.auto_backup_time.format.extended"_lang, value / 60, value % 60);
                 }();
 
-                if (ImGui::SliderInt(name.data(), &m_value, 0, (30 * 60) / 30, format.c_str(), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
-                    return true;
-                }
-
-                return false;
+                return ImGui::SliderInt(name.data(), &m_value, 0, (30 * 60) / 30, format.c_str(), ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput);
             }
 
             void load(const nlohmann::json &data) override {
@@ -286,7 +286,7 @@ namespace hex::plugin::builtin {
                 bool settingChanged = false;
 
                 ImGui::BeginDisabled(m_drawShortcut.matches(m_defaultShortcut));
-                if (ImGui::Button("X", ImGui::GetStyle().FramePadding * 2 + ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()))) {
+                if (ImGuiExt::DimmedButton(ICON_VS_DISCARD, ImGui::GetStyle().FramePadding * 2 + ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()))) {
                     this->reset();
                     if (!m_hasDuplicate) {
                         m_shortcut = m_defaultShortcut;
@@ -322,9 +322,6 @@ namespace hex::plugin::builtin {
                         ShortcutManager::resumeShortcuts();
 
                         settingChanged = true;
-                        if (!m_hasDuplicate) {
-
-                        }
                     }
                 }
 
@@ -333,6 +330,9 @@ namespace hex::plugin::builtin {
 
             void load(const nlohmann::json &data) override {
                 std::set<Key> keys;
+
+                if (data.empty())
+                    return;
 
                 for (const auto &key : data.get<std::vector<u32>>())
                     keys.insert(Key(scanCodeToKey(key)));
@@ -347,6 +347,10 @@ namespace hex::plugin::builtin {
             }
 
             nlohmann::json store() override {
+                // Don't store shortcuts that were not changed by the user
+                if (m_shortcut == m_defaultShortcut)
+                    return {};
+
                 std::vector<u32> keys;
 
                 for (const auto &key : m_shortcut.getKeys()) {
@@ -402,21 +406,18 @@ namespace hex::plugin::builtin {
         };
 
         class ToolbarIconsWidget : public ContentRegistry::Settings::Widgets::Widget {
-        private:
-            struct MenuItemSorter {
-                bool operator()(const auto *a, const auto *b) const {
-                    return a->toolbarIndex < b->toolbarIndex;
-                }
-            };
-
         public:
             bool draw(const std::string &) override {
                 bool changed = false;
 
+                const auto currIndex = std::ranges::count_if(ContentRegistry::UserInterface::impl::getMenuItems(), [](const auto &entry) {
+                    return entry.second.toolbarIndex != -1;
+                });
+
                 // Top level layout table
                 if (ImGui::BeginTable("##top_level", 2, ImGuiTableFlags_None, ImGui::GetContentRegionAvail())) {
-                    ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthStretch, 0.3F);
-                    ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthStretch, 0.7F);
+                    ImGui::TableSetupColumn("##left", ImGuiTableColumnFlags_WidthStretch, 0.4F);
+                    ImGui::TableSetupColumn("##right", ImGuiTableColumnFlags_WidthStretch, 0.6F);
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
 
@@ -426,7 +427,10 @@ namespace hex::plugin::builtin {
                         ImGui::TableNextColumn();
 
                         // Loop over all available menu items
-                        for (auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItems()) {
+                        for (auto &[priority, menuItem] : ContentRegistry::UserInterface::impl::getMenuItems()) {
+                            ImGui::PushID(&menuItem);
+                            ON_SCOPE_EXIT { ImGui::PopID(); };
+
                             // Filter out items without icon, separators, submenus and items that are already in the toolbar
 
                             if (menuItem.icon.glyph.empty())
@@ -435,9 +439,9 @@ namespace hex::plugin::builtin {
                             const auto &unlocalizedName = menuItem.unlocalizedNames.back();
                             if (menuItem.unlocalizedNames.size() > 2)
                                 continue;
-                            if (unlocalizedName.get() == ContentRegistry::Interface::impl::SeparatorValue)
+                            if (unlocalizedName.get() == ContentRegistry::UserInterface::impl::SeparatorValue)
                                 continue;
-                            if (unlocalizedName.get() == ContentRegistry::Interface::impl::SubMenuValue)
+                            if (unlocalizedName.get() == ContentRegistry::UserInterface::impl::SubMenuValue)
                                 continue;
                             if (menuItem.toolbarIndex != -1)
                                 continue;
@@ -445,15 +449,22 @@ namespace hex::plugin::builtin {
                             ImGui::TableNextRow();
                             ImGui::TableNextColumn();
 
-                            // Draw the menu item
-                            ImGui::Selectable(hex::format("{} {}", menuItem.icon.glyph, Lang(unlocalizedName)).c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
+                            std::string name = Lang(unlocalizedName);
+                            if (menuItem.view != nullptr) {
+                                name += fmt::format(" ({})", Lang(menuItem.view->getUnlocalizedName()));
+                            }
 
-                            // Handle draggin the menu item to the toolbar box
+                            // Draw the menu item
+                            ImGui::Selectable(fmt::format("{} {}", menuItem.icon.glyph, name).c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
+                            ImGui::SetItemTooltip("%s", name.c_str());
+
+                            // Handle dragging the menu item to the toolbar box
                             if (ImGui::BeginDragDropSource()) {
-                                auto ptr = &menuItem;
+                                static const void* ptr;
+                                ptr = &menuItem;
                                 ImGui::SetDragDropPayload("MENU_ITEM_PAYLOAD", &ptr, sizeof(void*));
 
-                                ImGuiExt::TextFormatted("{} {}", menuItem.icon.glyph, Lang(unlocalizedName));
+                                ImGuiExt::TextFormatted("{} {}", menuItem.icon.glyph, name);
 
                                 ImGui::EndDragDropSource();
                             }
@@ -465,7 +476,7 @@ namespace hex::plugin::builtin {
                     // Handle dropping menu items from the toolbar box
                     if (ImGui::BeginDragDropTarget()) {
                         if (auto payload = ImGui::AcceptDragDropPayload("TOOLBAR_ITEM_PAYLOAD"); payload != nullptr) {
-                            auto &menuItem = *static_cast<ContentRegistry::Interface::impl::MenuItem **>(payload->Data);
+                            auto &menuItem = *static_cast<ContentRegistry::UserInterface::impl::MenuItem **>(payload->Data);
 
                             menuItem->toolbarIndex = -1;
                             changed = true;
@@ -478,20 +489,28 @@ namespace hex::plugin::builtin {
 
                     // Draw toolbar icon box
                     if (ImGuiExt::BeginSubWindow("hex.builtin.setting.toolbar.icons"_lang, nullptr, ImGui::GetContentRegionAvail())) {
-                        if (ImGui::BeginTable("##icons", 6, ImGuiTableFlags_SizingStretchSame, ImGui::GetContentRegionAvail())) {
+                        const auto itemWidth = 60_scaled;
+                        const auto columnCount = int(ImGui::GetContentRegionAvail().x / itemWidth);
+                        if (ImGui::BeginTable("##icons", columnCount, ImGuiTableFlags_SizingStretchSame, ImGui::GetContentRegionAvail())) {
                             ImGui::TableNextRow();
 
                             // Find all menu items that are in the toolbar and sort them by their toolbar index
-                            std::set<ContentRegistry::Interface::impl::MenuItem*, MenuItemSorter> toolbarItems;
-                            for (auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItemsMutable()) {
+                            std::vector<ContentRegistry::UserInterface::impl::MenuItem*> toolbarItems;
+                            for (auto &[priority, menuItem] : ContentRegistry::UserInterface::impl::getMenuItemsMutable()) {
                                 if (menuItem.toolbarIndex == -1)
                                     continue;
 
-                                toolbarItems.emplace(&menuItem);
+                                toolbarItems.emplace_back(&menuItem);
                             }
+                            std::ranges::sort(toolbarItems, [](auto *a, auto *b) {
+                                return a->toolbarIndex < b->toolbarIndex;
+                            });
 
                             // Loop over all toolbar items
                             for (auto &menuItem : toolbarItems) {
+                                ImGui::PushID(menuItem);
+                                ON_SCOPE_EXIT { ImGui::PopID(); };
+
                                 // Filter out items without icon, separators, submenus and items that are not in the toolbar
                                 if (menuItem->icon.glyph.empty())
                                     continue;
@@ -499,7 +518,7 @@ namespace hex::plugin::builtin {
                                 const auto &unlocalizedName = menuItem->unlocalizedNames.back();
                                 if (menuItem->unlocalizedNames.size() > 2)
                                     continue;
-                                if (unlocalizedName.get() == ContentRegistry::Interface::impl::SubMenuValue)
+                                if (unlocalizedName.get() == ContentRegistry::UserInterface::impl::SubMenuValue)
                                     continue;
                                 if (menuItem->toolbarIndex == -1)
                                     continue;
@@ -507,7 +526,7 @@ namespace hex::plugin::builtin {
                                 ImGui::TableNextColumn();
 
                                 // Draw the toolbar item
-                                ImGui::InvisibleButton(unlocalizedName.get().c_str(), ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().x));
+                                ImGui::InvisibleButton(unlocalizedName.get().c_str(), ImVec2(itemWidth, itemWidth));
 
                                 // Handle dragging the toolbar item around
                                 if (ImGui::BeginDragDropSource()) {
@@ -521,9 +540,29 @@ namespace hex::plugin::builtin {
                                 // Handle dropping toolbar items onto each other to reorder them
                                 if (ImGui::BeginDragDropTarget()) {
                                     if (auto payload = ImGui::AcceptDragDropPayload("TOOLBAR_ITEM_PAYLOAD"); payload != nullptr) {
-                                        auto &otherMenuItem = *static_cast<ContentRegistry::Interface::impl::MenuItem **>(payload->Data);
+                                        auto &otherMenuItem = *static_cast<ContentRegistry::UserInterface::impl::MenuItem **>(payload->Data);
 
-                                        std::swap(menuItem->toolbarIndex, otherMenuItem->toolbarIndex);
+                                        // Get all toolbar items sorted by toolbarIndex
+                                        std::vector<ContentRegistry::UserInterface::impl::MenuItem*> newToolbarItems = toolbarItems;
+
+                                        // Remove otherMenuItem from its current position
+                                        auto it = std::ranges::find(newToolbarItems, otherMenuItem);
+                                        if (it != newToolbarItems.end())
+                                            newToolbarItems.erase(it);
+
+                                        // Find current menuItem position
+                                        auto insertPos = std::ranges::find(newToolbarItems, menuItem);
+
+                                        if (menuItem->toolbarIndex > otherMenuItem->toolbarIndex)
+                                            ++insertPos;
+
+                                        // Insert otherMenuItem before menuItem
+                                        newToolbarItems.insert(insertPos, otherMenuItem);
+
+                                        // Update toolbarIndex for all items
+                                        for (size_t i = 0; i < newToolbarItems.size(); ++i)
+                                            newToolbarItems[i]->toolbarIndex = static_cast<int>(i);
+
                                         changed = true;
                                     }
 
@@ -549,7 +588,7 @@ namespace hex::plugin::builtin {
                                     // Draw all the color buttons
                                     for (auto color : Colors) {
                                         ImGui::PushID(&color);
-                                        if (ImGui::ColorButton(hex::format("##color{}", u32(color)).c_str(), ImGuiExt::GetCustomColorVec4(color), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoPicker, ImVec2(20, 20))) {
+                                        if (ImGui::ColorButton(fmt::format("##color{}", u32(color)).c_str(), ImGuiExt::GetCustomColorVec4(color), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoPicker, ImVec2(20, 20))) {
                                             menuItem->icon.color = color;
                                             ImGui::CloseCurrentPopup();
                                             changed = true;
@@ -565,16 +604,25 @@ namespace hex::plugin::builtin {
                                 auto max = ImGui::GetItemRectMax();
                                 auto iconSize = ImGui::CalcTextSize(menuItem->icon.glyph.c_str());
 
-                                std::string text = Lang(unlocalizedName);
-                                if (text.ends_with("..."))
-                                    text = text.substr(0, text.size() - 3);
-
-                                auto textSize = ImGui::CalcTextSize(text.c_str());
-
                                 // Draw icon and text of the toolbar item
                                 auto drawList = ImGui::GetWindowDrawList();
                                 drawList->AddText((min + ((max - min) - iconSize) / 2) - ImVec2(0, 10_scaled), ImGuiExt::GetCustomColorU32(ImGuiCustomCol(menuItem->icon.color)), menuItem->icon.glyph.c_str());
-                                drawList->AddText((min + ((max - min)) / 2) + ImVec2(-textSize.x / 2, 5_scaled), ImGui::GetColorU32(ImGuiCol_Text), text.c_str());
+
+                                ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.65F);
+                                {
+                                    std::string name = Lang(unlocalizedName);
+                                    if (name.ends_with("..."))
+                                        name = name.substr(0, name.size() - 3);
+
+                                    if (menuItem->view != nullptr) {
+                                        name += fmt::format(" ({})", Lang(menuItem->view->getUnlocalizedName()));
+                                    }
+
+                                    auto textSize = ImGui::CalcTextSize(name.c_str(), nullptr, false, max.x - min.x);
+
+                                    drawList->AddText(nullptr, 0.0F, (min + ((max - min)) / 2) + ImVec2(-textSize.x / 2, 5_scaled), ImGui::GetColorU32(ImGuiCol_Text), name.c_str(), nullptr, max.x - min.x);
+                                }
+                                ImGui::PopFont();
                             }
 
                             ImGui::EndTable();
@@ -586,10 +634,9 @@ namespace hex::plugin::builtin {
                     // Handle dropping menu items onto the toolbar box
                     if (ImGui::BeginDragDropTarget()) {
                         if (auto payload = ImGui::AcceptDragDropPayload("MENU_ITEM_PAYLOAD"); payload != nullptr) {
-                            auto &menuItem = *static_cast<ContentRegistry::Interface::impl::MenuItem **>(payload->Data);
+                            auto &menuItem = *static_cast<ContentRegistry::UserInterface::impl::MenuItem **>(payload->Data);
 
-                            menuItem->toolbarIndex = m_currIndex;
-                            m_currIndex += 1;
+                            menuItem->toolbarIndex = currIndex;
                             changed = true;
                         }
 
@@ -600,7 +647,7 @@ namespace hex::plugin::builtin {
                 }
 
                 if (changed) {
-                    ContentRegistry::Interface::updateToolbarItems();
+                    ContentRegistry::UserInterface::updateToolbarItems();
                 }
 
                 return changed;
@@ -609,7 +656,7 @@ namespace hex::plugin::builtin {
             nlohmann::json store() override {
                 std::map<i32, std::pair<std::string, u32>> items;
 
-                for (const auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItems()) {
+                for (const auto &[priority, menuItem] : ContentRegistry::UserInterface::impl::getMenuItems()) {
                     if (menuItem.toolbarIndex != -1)
                         items.emplace(menuItem.toolbarIndex, std::make_pair(menuItem.unlocalizedNames.back().get(), menuItem.icon.color));
                 }
@@ -621,14 +668,17 @@ namespace hex::plugin::builtin {
                 if (data.is_null())
                     return;
 
-                for (auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItemsMutable())
+                if (data.is_array() && data.empty())
+                    return;
+
+                for (auto &[priority, menuItem] : ContentRegistry::UserInterface::impl::getMenuItemsMutable())
                     menuItem.toolbarIndex = -1;
 
                 auto toolbarItems = data.get<std::map<i32, std::pair<std::string, u32>>>();
                 if (toolbarItems.empty())
                     return;
 
-                for (auto &[priority, menuItem] : ContentRegistry::Interface::impl::getMenuItemsMutable()) {
+                for (auto &[priority, menuItem] : ContentRegistry::UserInterface::impl::getMenuItemsMutable()) {
                     for (const auto &[index, value] : toolbarItems) {
                         const auto &[name, color] = value;
                         if (menuItem.unlocalizedNames.back().get() == name) {
@@ -639,13 +689,8 @@ namespace hex::plugin::builtin {
                     }
                 }
 
-                m_currIndex = toolbarItems.size();
-
-                ContentRegistry::Interface::updateToolbarItems();
+                ContentRegistry::UserInterface::updateToolbarItems();
             }
-
-        private:
-            i32 m_currIndex = 0;
         };
 
         bool getDefaultBorderlessWindowMode() {
@@ -705,25 +750,46 @@ namespace hex::plugin::builtin {
 
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "", "hex.builtin.setting.general.show_tips", false);
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "", "hex.builtin.setting.general.save_recent_providers", true);
-            ContentRegistry::Settings::add<AutoBackupWidget>("hex.builtin.setting.general", "", "hex.builtin.setting.general.auto_backup_time");
             ContentRegistry::Settings::add<Widgets::SliderDataSize>("hex.builtin.setting.general", "", "hex.builtin.setting.general.max_mem_file_size", 512_MiB, 0_bytes, 32_GiB, 1_MiB)
                 .setTooltip("hex.builtin.setting.general.max_mem_file_size.desc");
             ContentRegistry::Settings::add<Widgets::SliderInteger>("hex.builtin.setting.general", "hex.builtin.setting.general.patterns", "hex.builtin.setting.general.pattern_data_max_filter_items", 128, 32, 1024);
 
-            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.patterns", "hex.builtin.setting.general.auto_load_patterns", true);
+            auto suggestPatterns = ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.patterns", "hex.builtin.setting.general.suggest_patterns", true);
+            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.patterns", "hex.builtin.setting.general.auto_apply_patterns", false).setEnabledCallback([=] {
+                return static_cast<Widgets::Checkbox&>(suggestPatterns.getWidget()).isChecked();
+            });
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.patterns", "hex.builtin.setting.general.sync_pattern_source", false);
+
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.network", "hex.builtin.setting.general.network_interface", false);
+
+            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.network", "hex.builtin.setting.general.mcp_server", false)
+                .setTooltip("hex.builtin.setting.general.mcp_server.desc");
 
             #if !defined(OS_WEB)
                 ContentRegistry::Settings::add<ServerContactWidget>("hex.builtin.setting.general", "hex.builtin.setting.general.network", "hex.builtin.setting.general.server_contact");
                 ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.network", "hex.builtin.setting.general.upload_crash_logs", true);
             #endif
+
+
+            ContentRegistry::Settings::add<AutoBackupWidget>("hex.builtin.setting.general", "hex.builtin.setting.general.backups", "hex.builtin.setting.general.backups.auto_backup_time");
+            ContentRegistry::Settings::add<Widgets::Spacer>("hex.builtin.setting.general", "hex.builtin.setting.general.backups", "hex.builtin.setting.general.backups.spacer");
+
+            auto fileBackupEnabledWidget = ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.general", "hex.builtin.setting.general.backups", "hex.builtin.setting.general.backups.file_backup.enable", true);
+            ContentRegistry::Settings::add<Widgets::SliderDataSize>("hex.builtin.setting.general", "hex.builtin.setting.general.backups", "hex.builtin.setting.general.backups.file_backup.max_size", 512_MiB, 0_bytes, 32_GiB, 1_MiB)
+                .setEnabledCallback([=] {
+                    return static_cast<Widgets::Checkbox&>(fileBackupEnabledWidget.getWidget()).isChecked();
+                });
+            ContentRegistry::Settings::add<Widgets::TextBox>("hex.builtin.setting.general", "hex.builtin.setting.general.backups", "hex.builtin.setting.general.backups.file_backup.extension", ".bak")
+                .setEnabledCallback([=] {
+                    return static_cast<Widgets::Checkbox&>(fileBackupEnabledWidget.getWidget()).isChecked();
+                });
         }
 
         /* Interface */
         {
             auto themeNames = ThemeManager::getThemeNames();
             std::vector<nlohmann::json> themeJsons = { };
+            themeJsons.reserve(themeNames.size());
             for (const auto &themeName : themeNames)
                 themeJsons.emplace_back(themeName);
 
@@ -779,15 +845,29 @@ namespace hex::plugin::builtin {
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.show_header_command_palette", true);
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.style", "hex.builtin.setting.interface.display_shortcut_highlights", true);
 
-            std::vector<std::string> languageNames;
-            std::vector<nlohmann::json> languageCodes;
+            {
+                std::vector<std::string> languageNames;
+                std::vector<nlohmann::json> languageCodes;
 
-            for (auto &[languageCode, languageName] : LocalizationManager::getSupportedLanguages()) {
-                languageNames.emplace_back(languageName);
-                languageCodes.emplace_back(languageCode);
+                {
+                    const auto osLanguage = hex::getOSLanguage();
+                    if (osLanguage.has_value()) {
+                        const auto &languageDefinition = LocalizationManager::getLanguageDefinition(osLanguage.value());
+                        languageNames.emplace_back(fmt::format("Native ({})", languageDefinition.nativeName));
+                        languageCodes.emplace_back("native");
+                    }
+                }
+
+                for (auto &[languageCode, definition] : LocalizationManager::getLanguageDefinitions()) {
+                    if (!dbg::debugModeEnabled() && definition.hidden)
+                        continue;
+
+                    languageNames.emplace_back(fmt::format("{} ({}) {}", definition.nativeName, definition.name, definition.hidden ? "[WORK IN PROGRESS]" : ""));
+                    languageCodes.emplace_back(languageCode);
+                }
+
+                ContentRegistry::Settings::add<Widgets::DropDown>("hex.builtin.setting.interface", "hex.builtin.setting.interface.language", "hex.builtin.setting.interface.language", languageNames, languageCodes, "en-US");
             }
-
-            ContentRegistry::Settings::add<Widgets::DropDown>("hex.builtin.setting.interface", "hex.builtin.setting.interface.language", "hex.builtin.setting.interface.language", languageNames, languageCodes, "en-US");
 
             ContentRegistry::Settings::add<Widgets::TextBox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.language", "hex.builtin.setting.interface.wiki_explain_language", "en");
             ContentRegistry::Settings::add<FPSWidget>("hex.builtin.setting.interface", "hex.builtin.setting.interface.window", "hex.builtin.setting.interface.fps");
@@ -811,6 +891,8 @@ namespace hex::plugin::builtin {
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.window", "hex.builtin.setting.interface.randomize_window_title", false);
 
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.window", "hex.builtin.setting.interface.restore_window_pos", false);
+            ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.interface", "hex.builtin.setting.interface.window", "hex.builtin.setting.interface.show_task_finish_notification", true)
+                .setTooltip("hex.builtin.setting.interface.show_task_finish_notification.desc");
 
             ContentRegistry::Settings::add<Widgets::ColorPicker>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.highlight_color", ImColor(0x80, 0x80, 0xC0, 0x60));
             ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.hex_editor", "", "hex.builtin.setting.hex_editor.sync_scrolling", false);
@@ -929,6 +1011,27 @@ namespace hex::plugin::builtin {
 
             ContentRegistry::Settings::impl::store();
         });
+
+
+        /* Plugins */
+        {
+            for (const auto &plugin : PluginManager::getPlugins()) {
+                if (plugin.isLibraryPlugin())
+                    continue;
+                if (plugin.isBuiltinPlugin())
+                    continue;
+
+                auto interface = ContentRegistry::Settings::add<Widgets::Checkbox>("hex.builtin.setting.plugins", "hex.builtin.setting.loaded_plugins", plugin.getPluginName(), true)
+                    .setTooltip(plugin.getPluginDescription())
+                    .setChangedCallback([&plugin](Widgets::Widget &widget) {
+                        auto checkBox = static_cast<Widgets::Checkbox *>(&widget);
+                        PluginManager::setPluginEnabled(plugin, checkBox->isChecked());
+                    })
+                    .requiresRestart();
+
+                PluginManager::setPluginEnabled(plugin, static_cast<Widgets::Checkbox *>(&interface.getWidget())->isChecked());
+            }
+        }
     }
 
     static void loadLayoutSettings() {
@@ -954,7 +1057,8 @@ namespace hex::plugin::builtin {
         auto folderPathStrings = ContentRegistry::Settings::read<std::vector<std::string>>("hex.builtin.setting.folders", "hex.builtin.setting.folders", { });
 
         std::vector<std::fs::path> paths;
-        for (const auto &pathString : folderPathStrings) {
+        paths.reserve(folderPathStrings.size());
+for (const auto &pathString : folderPathStrings) {
             paths.emplace_back(pathString);
         }
 

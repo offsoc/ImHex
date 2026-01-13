@@ -8,7 +8,7 @@
 #include <imgui_internal.h>
 #include <implot.h>
 #include <imnodes.h>
-#include <TextEditor.h>
+#include <ui/text_editor.hpp>
 #include <romfs/romfs.hpp>
 
 #include <wolv/io/file.hpp>
@@ -52,11 +52,14 @@ namespace hex::plugin::builtin {
                     { "resize-grip",                    ImGuiCol_ResizeGrip             },
                     { "resize-grip-hovered",            ImGuiCol_ResizeGripHovered      },
                     { "resize-grip-active",             ImGuiCol_ResizeGripActive       },
+                    { "input-text-cursor",              ImGuiCol_InputTextCursor        },
                     { "tab",                            ImGuiCol_Tab                    },
                     { "tab-hovered",                    ImGuiCol_TabHovered             },
                     { "tab-active",                     ImGuiCol_TabSelected            },
+                    { "tab-active-overline",            ImGuiCol_TabSelectedOverline    },
                     { "tab-unfocused",                  ImGuiCol_TabDimmed              },
                     { "tab-unfocused-active",           ImGuiCol_TabDimmedSelected      },
+                    { "tab-unfocused-active-overline",  ImGuiCol_TabDimmedSelectedOverline },
                     { "docking-preview",                ImGuiCol_DockingPreview         },
                     { "docking-empty-background",       ImGuiCol_DockingEmptyBg         },
                     { "plot-lines",                     ImGuiCol_PlotLines              },
@@ -68,7 +71,9 @@ namespace hex::plugin::builtin {
                     { "table-border-light",             ImGuiCol_TableBorderLight       },
                     { "table-row-background",           ImGuiCol_TableRowBg             },
                     { "table-row-background-alt",       ImGuiCol_TableRowBgAlt          },
+                    { "text-link",                      ImGuiCol_TextLink               },
                     { "text-selected-background",       ImGuiCol_TextSelectedBg         },
+                    { "tree-lines",                     ImGuiCol_TreeLines              },
                     { "drag-drop-target",               ImGuiCol_DragDropTarget         },
                     { "nav-highlight",                  ImGuiCol_NavCursor              },
                     { "nav-windowing-highlight",        ImGuiCol_NavWindowingHighlight  },
@@ -211,43 +216,63 @@ namespace hex::plugin::builtin {
                    }
                 );
             }
-
             {
                 const static ThemeManager::ColorMap TextEditorColorMap = {
-                    { "default",                    u32(TextEditor::PaletteIndex::Default)                 },
-                    { "keyword",                    u32(TextEditor::PaletteIndex::Keyword)                 },
-                    { "number",                     u32(TextEditor::PaletteIndex::Number)                  },
-                    { "string",                     u32(TextEditor::PaletteIndex::String)                  },
-                    { "char-literal",               u32(TextEditor::PaletteIndex::CharLiteral)             },
-                    { "punctuation",                u32(TextEditor::PaletteIndex::Punctuation)             },
-                    { "preprocessor",               u32(TextEditor::PaletteIndex::Preprocessor)            },
-                    { "identifier",                 u32(TextEditor::PaletteIndex::Identifier)              },
-                    { "known-identifier",           u32(TextEditor::PaletteIndex::KnownIdentifier)         },
-                    { "preproc-identifier",         u32(TextEditor::PaletteIndex::PreprocIdentifier)       },
-                    { "global-doc-comment",         u32(TextEditor::PaletteIndex::GlobalDocComment)        },
-                    { "doc-comment",                u32(TextEditor::PaletteIndex::DocComment)              },
-                    { "comment",                    u32(TextEditor::PaletteIndex::Comment)                 },
-                    { "multi-line-comment",         u32(TextEditor::PaletteIndex::MultiLineComment)        },
-                    { "preprocessor-deactivated",   u32(TextEditor::PaletteIndex::PreprocessorDeactivated) },
-                    { "background",                 u32(TextEditor::PaletteIndex::Background)              },
-                    { "cursor",                     u32(TextEditor::PaletteIndex::Cursor)                  },
-                    { "selection",                  u32(TextEditor::PaletteIndex::Selection)               },
-                    { "error-marker",               u32(TextEditor::PaletteIndex::ErrorMarker)             },
-                    { "breakpoint",                 u32(TextEditor::PaletteIndex::Breakpoint)              },
-                    { "line-number",                u32(TextEditor::PaletteIndex::LineNumber)              },
-                    { "current-line-fill",          u32(TextEditor::PaletteIndex::CurrentLineFill)         },
-                    { "current-line-fill-inactive", u32(TextEditor::PaletteIndex::CurrentLineFillInactive) },
-                    { "current-line-edge",          u32(TextEditor::PaletteIndex::CurrentLineEdge)         }
+                    { "attribute",                  u32(ui::TextEditor::PaletteIndex::Attribute)                },
+                    { "background",                 u32(ui::TextEditor::PaletteIndex::Background)               },
+                    { "breakpoint",                 u32(ui::TextEditor::PaletteIndex::Breakpoint)               },
+                    { "calculated-pointer",         u32(ui::TextEditor::PaletteIndex::CalculatedPointer)        },
+                    { "char-literal",               u32(ui::TextEditor::PaletteIndex::CharLiteral)              },
+                    { "comment",                    u32(ui::TextEditor::PaletteIndex::Comment)                  },
+                    { "current-line-edge",          u32(ui::TextEditor::PaletteIndex::CurrentLineEdge)          },
+                    { "current-line-fill",          u32(ui::TextEditor::PaletteIndex::CurrentLineFill)          },
+                    { "current-line-fill-inactive", u32(ui::TextEditor::PaletteIndex::CurrentLineFillInactive)  },
+                    { "cursor",                     u32(ui::TextEditor::PaletteIndex::Cursor)                   },
+                    { "debug-text",                 u32(ui::TextEditor::PaletteIndex::DebugText)                },
+                    { "default",                    u32(ui::TextEditor::PaletteIndex::Default)                  },
+                    { "default-text",               u32(ui::TextEditor::PaletteIndex::DefaultText)              },
+                    { "doc-block-comment",          u32(ui::TextEditor::PaletteIndex::DocBlockComment)          },
+                    { "doc-comment",                u32(ui::TextEditor::PaletteIndex::DocComment)               },
+                    { "doc-global-comment",         u32(ui::TextEditor::PaletteIndex::GlobalDocComment)         },
+                    { "error-marker",               u32(ui::TextEditor::PaletteIndex::ErrorMarker)              },
+                    { "error-text",                 u32(ui::TextEditor::PaletteIndex::ErrorText)                },
+                    { "function",                   u32(ui::TextEditor::PaletteIndex::Function)                 },
+                    { "function-parameter",         u32(ui::TextEditor::PaletteIndex::FunctionParameter)        },
+                    { "function-variable",          u32(ui::TextEditor::PaletteIndex::FunctionVariable)         },
+                    { "global-variable",            u32(ui::TextEditor::PaletteIndex::GlobalVariable)           },
+                    { "identifier" ,                u32(ui::TextEditor::PaletteIndex::Identifier)               },
+                    { "keyword",                    u32(ui::TextEditor::PaletteIndex::Keyword)                  },
+                    { "known-identifier",           u32(ui::TextEditor::PaletteIndex::BuiltInType)              },
+                    { "line-number",                u32(ui::TextEditor::PaletteIndex::LineNumber)               },
+                    { "local-variable",             u32(ui::TextEditor::PaletteIndex::LocalVariable)            },
+                    { "multi-line-comment",         u32(ui::TextEditor::PaletteIndex::BlockComment)             },
+                    { "namespace",                  u32(ui::TextEditor::PaletteIndex::NameSpace)                },
+                    { "number",                     u32(ui::TextEditor::PaletteIndex::NumericLiteral)           },
+                    { "pattern-variable",           u32(ui::TextEditor::PaletteIndex::PatternVariable)          },
+                    { "placed-variable",            u32(ui::TextEditor::PaletteIndex::PlacedVariable)           },
+                    { "preprocessor",               u32(ui::TextEditor::PaletteIndex::Directive)                },
+                    { "preprocessor-deactivated",   u32(ui::TextEditor::PaletteIndex::PreprocessorDeactivated)  },
+                    { "preproc-identifier",         u32(ui::TextEditor::PaletteIndex::PreprocIdentifier)        },
+                    { "punctuation",                u32(ui::TextEditor::PaletteIndex::Operator)                 },
+                    { "selection",                  u32(ui::TextEditor::PaletteIndex::Selection)                },
+                    { "separator",                  u32(ui::TextEditor::PaletteIndex::Separator)                },
+                    { "string",                     u32(ui::TextEditor::PaletteIndex::StringLiteral)            },
+                    { "template-variable",          u32(ui::TextEditor::PaletteIndex::TemplateArgument)         },
+                    { "typedef",                    u32(ui::TextEditor::PaletteIndex::TypeDef)                  },
+                    { "unknown-identifier",         u32(ui::TextEditor::PaletteIndex::UnkIdentifier)            },
+                    { "user-defined-type",          u32(ui::TextEditor::PaletteIndex::UserDefinedType)          },
+                    { "view",                       u32(ui::TextEditor::PaletteIndex::View)                     },
+                    { "warning-text",               u32(ui::TextEditor::PaletteIndex::WarningText)              }
                 };
 
                 ThemeManager::addThemeHandler("text-editor", TextEditorColorMap,
                     [](u32 colorId) -> ImColor {
-                        return TextEditor::GetPalette()[colorId];
+                        return ui::TextEditor::getPalette()[colorId];
                     },
                    [](u32 colorId, ImColor color) {
-                        auto palette = TextEditor::GetPalette();
+                        auto palette = ui::TextEditor::getPalette();
                         palette[colorId] = color;
-                        TextEditor::SetPalette(palette);
+                       ui::TextEditor::setPalette(palette);
                     }
                 );
             }
@@ -259,34 +284,55 @@ namespace hex::plugin::builtin {
             {
                 auto &style = ImGui::GetStyle();
                 const static ThemeManager::StyleMap ImGuiStyleMap = {
-                    { "alpha",                  { &style.Alpha,                     0.1F,   1.0F,    false } },
-                    { "disabled-alpha",         { &style.DisabledAlpha,             0.0F,   1.0F,    false } },
-                    { "window-padding",         { &style.WindowPadding,             0.0F,   20.0F,   true  } },
-                    { "window-rounding",        { &style.WindowRounding,            0.0F,   12.0F,   true  } },
-                    { "window-border-size",     { &style.WindowBorderSize,          0.0F,   1.0F,    true  } },
-                    { "window-min-size",        { &style.WindowMinSize,             0.0F,   1000.0F, true  } },
-                    { "window-title-align",     { &style.WindowTitleAlign,          0.0F,   1.0F ,   false } },
-                    { "child-rounding",         { &style.ChildRounding,             0.0F,   12.0F,   true  } },
-                    { "child-border-size",      { &style.ChildBorderSize,           0.0F,   1.0F ,   true  } },
-                    { "popup-rounding",         { &style.PopupRounding,             0.0F,   12.0F,   true  } },
-                    { "popup-border-size",      { &style.PopupBorderSize,           0.0F,   1.0F,    true  } },
-                    { "frame-padding",          { &style.FramePadding,              0.0F,   20.0F,   true  } },
-                    { "frame-rounding",         { &style.FrameRounding,             0.0F,   12.0F,   true  } },
-                    { "frame-border-size",      { &style.FrameBorderSize,           0.0F,   1.0F,    true  } },
-                    { "item-spacing",           { &style.ItemSpacing,               0.0F,   20.0F,   true  } },
-                    { "item-inner-spacing",     { &style.ItemInnerSpacing,          0.0F,   20.0F,   true  } },
-                    { "indent-spacing",         { &style.IndentSpacing,             0.0F,   30.0F,   true  } },
-                    { "cell-padding",           { &style.CellPadding,               0.0F,   20.0F,   true  } },
-                    { "scrollbar-size",         { &style.ScrollbarSize,             0.0F,   20.0F,   true  } },
-                    { "scrollbar-rounding",     { &style.ScrollbarRounding,         0.0F,   12.0F,   true  } },
-                    { "grab-min-size",          { &style.GrabMinSize,               0.0F,   20.0F,   true  } },
-                    { "grab-rounding",          { &style.GrabRounding,              0.0F,   12.0F,   true  } },
-                    { "tab-rounding",           { &style.TabRounding,               0.0F,   12.0F,   true  } },
-                    { "button-text-align",      { &style.ButtonTextAlign,           0.0F,   1.0F,    false } },
-                    { "selectable-text-align",  { &style.SelectableTextAlign,       0.0F,   1.0F,    false } },
-                    { "window-shadow-size",     { &style.WindowShadowSize,          0.0F,   100.0F,  true  } },
-                    { "window-shadow-offset",   { &style.WindowShadowOffsetDist,    0.0F,   100.0F,  true  } },
-                    { "window-shadow-angle",    { &style.WindowShadowOffsetAngle,   0.0F,   10.0F,   false } },
+                    { "alpha",                                  { .value=&style.Alpha,                             .min=0.1F,    .max=1.0F,    .needsScaling=false } },
+                    { "disabled-alpha",                         { .value=&style.DisabledAlpha,                     .min=0.0F,    .max=1.0F,    .needsScaling=false } },
+                    { "window-padding",                         { .value=&style.WindowPadding,                     .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "window-rounding",                        { .value=&style.WindowRounding,                    .min=0.0F,    .max=12.0F,   .needsScaling=true  } },
+                    { "window-border-size",                     { .value=&style.WindowBorderSize,                  .min=0.0F,    .max=1.0F,    .needsScaling=true  } },
+                    { "window-border-hover-padding",            { .value=&style.WindowBorderHoverPadding,          .min=1.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "window-min-size",                        { .value=&style.WindowMinSize,                     .min=0.0F,    .max=1000.0F, .needsScaling=true  } },
+                    { "window-title-align",                     { .value=&style.WindowTitleAlign,                  .min=0.0F,    .max=1.0F,    .needsScaling=false } },
+                    { "child-rounding",                         { .value=&style.ChildRounding,                     .min=0.0F,    .max=12.0F,   .needsScaling=true  } },
+                    { "child-border-size",                      { .value=&style.ChildBorderSize,                   .min=0.0F,    .max=1.0F,    .needsScaling=true  } },
+                    { "popup-rounding",                         { .value=&style.PopupRounding,                     .min=0.0F,    .max=12.0F,   .needsScaling=true  } },
+                    { "popup-border-size",                      { .value=&style.PopupBorderSize,                   .min=0.0F,    .max=1.0F,    .needsScaling=true  } },
+                    { "frame-padding",                          { .value=&style.FramePadding,                      .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "frame-rounding",                         { .value=&style.FrameRounding,                     .min=0.0F,    .max=12.0F,   .needsScaling=true  } },
+                    { "frame-border-size",                      { .value=&style.FrameBorderSize,                   .min=0.0F,    .max=1.0F,    .needsScaling=true  } },
+                    { "item-spacing",                           { .value=&style.ItemSpacing,                       .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "item-inner-spacing",                     { .value=&style.ItemInnerSpacing,                  .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "indent-spacing",                         { .value=&style.IndentSpacing,                     .min=0.0F,    .max=30.0F,   .needsScaling=true  } },
+                    { "cell-padding",                           { .value=&style.CellPadding,                       .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "touch-extra-padding",                    { .value=&style.TouchExtraPadding,                 .min=0.0F,    .max=10.0F,   .needsScaling=true  } },
+                    { "columns-min-spacing",                    { .value=&style.ColumnsMinSpacing,                 .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "scrollbar-size",                         { .value=&style.ScrollbarSize,                     .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "scrollbar-rounding",                     { .value=&style.ScrollbarRounding,                 .min=0.0F,    .max=12.0F,   .needsScaling=true  } },
+                    { "grab-min-size",                          { .value=&style.GrabMinSize,                       .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "grab-rounding",                          { .value=&style.GrabRounding,                      .min=0.0F,    .max=12.0F,   .needsScaling=true  } },
+                    { "log-slider-deadzone",                    { .value=&style.LogSliderDeadzone,                 .min=0.0F,    .max=12.0F,   .needsScaling=true  } },
+                    { "image-border-size",                      { .value=&style.ImageBorderSize,                   .min=0.0F,    .max=1.0F,    .needsScaling=true  } },
+                    { "tab-rounding",                           { .value=&style.TabRounding,                       .min=0.0F,    .max=12.0F,   .needsScaling=true  } },
+                    { "tab-border-size",                        { .value=&style.TabBorderSize,                     .min=0.0F,    .max=1.0F,    .needsScaling=true  } },
+                    { "tab-min-width-base",                     { .value=&style.TabMinWidthBase,                   .min=0.0F,    .max=500.0F,  .needsScaling=true  } },
+                    { "tab-min-width-shrink",                   { .value=&style.TabMinWidthShrink,                 .min=0.0F,    .max=500.0F,  .needsScaling=true  } },
+                    { "tab-close-button-min-width-selected",    { .value=&style.TabCloseButtonMinWidthSelected,   .min=-1.0F,    .max=100.0F,  .needsScaling=false } },
+                    { "tab-close-button-min-width-unselected",  { .value=&style.TabCloseButtonMinWidthUnselected, .min=-1.0F,    .max=100.0F,  .needsScaling=false } },
+                    { "tab-bar-border-size",                    { .value=&style.TabBarBorderSize,                  .min=0.0F,    .max=10.0F,   .needsScaling=true  } },
+                    { "tab-bar-overline-size",                  { .value=&style.TabBarOverlineSize,                .min=0.0F,    .max=10.0F,   .needsScaling=true  } },
+                    { "button-text-align",                      { .value=&style.ButtonTextAlign,                   .min=0.0F,    .max=1.0F,    .needsScaling=false } },
+                    { "selectable-text-align",                  { .value=&style.SelectableTextAlign,               .min=0.0F,    .max=1.0F,    .needsScaling=false } },
+                    { "separator-text-border-size",             { .value=&style.SeparatorTextBorderSize,           .min=0.0F,    .max=5.0F,    .needsScaling=true  } },
+                    { "separator-text-align",                   { .value=&style.SeparatorTextAlign,                .min=0.0F,    .max=1.0F,    .needsScaling=false } },
+                    { "separator-text-padding",                 { .value=&style.SeparatorTextPadding,              .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "display-window-padding",                 { .value=&style.DisplayWindowPadding,              .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "display-safe-area-padding",              { .value=&style.DisplaySafeAreaPadding,            .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "docking-separator-size",                 { .value=&style.DockingSeparatorSize,              .min=0.0F,    .max=20.0F,   .needsScaling=true  } },
+                    { "mouse-cursor-scale",                     { .value=&style.MouseCursorScale,                  .min=0.1F,    .max=10.0F,   .needsScaling=true  } },
+                    { "curve-tessellation-tol",                 { .value=&style.CurveTessellationTol,              .min=0.0F,    .max=10.0F,   .needsScaling=true  } },
+                    { "circle-tessellation-max-error",          { .value=&style.CircleTessellationMaxError,        .min=0.0F,    .max=10.0F,   .needsScaling=true  } },
+                    { "window-shadow-size",                     { .value=&style.WindowShadowSize,                  .min=0.0F,    .max=100.0F,  .needsScaling=true  } },
+                    { "window-shadow-offset",                   { .value=&style.WindowShadowOffsetDist,            .min=0.0F,    .max=100.0F,  .needsScaling=true  } },
+                    { "window-shadow-angle",                    { .value=&style.WindowShadowOffsetAngle,           .min=0.0F,    .max=10.0F,   .needsScaling=false } }
                 };
 
                 ThemeManager::addStyleHandler("imgui", ImGuiStyleMap);
@@ -295,32 +341,32 @@ namespace hex::plugin::builtin {
             {
                 auto &style = ImPlot::GetStyle();
                 const static ThemeManager::StyleMap ImPlotStyleMap = {
-                        { "line-weight",            { &style.LineWeight,         0.0F, 5.0F,    true  } },
-                        { "marker-size",            { &style.MarkerSize,         2.0F, 10.0F,   true  } },
-                        { "marker-weight",          { &style.MarkerWeight,       0.0F, 5.0F,    true  } },
-                        { "fill-alpha",             { &style.FillAlpha,          0.0F, 1.0F,    false } },
-                        { "error-bar-size",         { &style.ErrorBarSize,       0.0F, 10.0F,   true  } },
-                        { "error-bar-weight",       { &style.ErrorBarWeight,     0.0F, 5.0F,    true  } },
-                        { "digital-bit-height",     { &style.DigitalBitHeight,   0.0F, 20.0F,   true  } },
-                        { "digital-bit-gap",        { &style.DigitalBitGap,      0.0F, 20.0F,   true  } },
-                        { "plot-border-size",       { &style.PlotBorderSize,     0.0F, 2.0F,    true  } },
-                        { "minor-alpha",            { &style.MinorAlpha,         0.0F, 1.0F,    false } },
-                        { "major-tick-len",         { &style.MajorTickLen,       0.0F, 20.0F,   true  } },
-                        { "minor-tick-len",         { &style.MinorTickLen,       0.0F, 20.0F,   true  } },
-                        { "major-tick-size",        { &style.MajorTickSize,      0.0F, 2.0F,    true  } },
-                        { "minor-tick-size",        { &style.MinorTickSize,      0.0F, 2.0F,    true  } },
-                        { "major-grid-size",        { &style.MajorGridSize,      0.0F, 2.0F,    true  } },
-                        { "minor-grid-size",        { &style.MinorGridSize,      0.0F, 2.0F,    true  } },
-                        { "plot-padding",           { &style.PlotPadding,        0.0F, 20.0F,   true  } },
-                        { "label-padding",          { &style.LabelPadding,       0.0F, 20.0F,   true  } },
-                        { "legend-padding",         { &style.LegendPadding,      0.0F, 20.0F,   true  } },
-                        { "legend-inner-padding",   { &style.LegendInnerPadding, 0.0F, 10.0F,   true  } },
-                        { "legend-spacing",         { &style.LegendSpacing,      0.0F, 5.0F,    true  } },
-                        { "mouse-pos-padding",      { &style.MousePosPadding,    0.0F, 20.0F,   true  } },
-                        { "annotation-padding",     { &style.AnnotationPadding,  0.0F, 5.0F,    true  } },
-                        { "fit-padding",            { &style.FitPadding,         0.0F, 0.2F,    true  } },
-                        { "plot-default-size",      { &style.PlotDefaultSize,    0.0F, 1000.0F, true  } },
-                        { "plot-min-size",          { &style.PlotMinSize,        0.0F, 300.0F,  true  } },
+                        { "line-weight",            { .value=&style.LineWeight,         .min=0.0F, .max=5.0F,    .needsScaling=true  } },
+                        { "marker-size",            { .value=&style.MarkerSize,         .min=2.0F, .max=10.0F,   .needsScaling=true  } },
+                        { "marker-weight",          { .value=&style.MarkerWeight,       .min=0.0F, .max=5.0F,    .needsScaling=true  } },
+                        { "fill-alpha",             { .value=&style.FillAlpha,          .min=0.0F, .max=1.0F,    .needsScaling=false } },
+                        { "error-bar-size",         { .value=&style.ErrorBarSize,       .min=0.0F, .max=10.0F,   .needsScaling=true  } },
+                        { "error-bar-weight",       { .value=&style.ErrorBarWeight,     .min=0.0F, .max=5.0F,    .needsScaling=true  } },
+                        { "digital-bit-height",     { .value=&style.DigitalBitHeight,   .min=0.0F, .max=20.0F,   .needsScaling=true  } },
+                        { "digital-bit-gap",        { .value=&style.DigitalBitGap,      .min=0.0F, .max=20.0F,   .needsScaling=true  } },
+                        { "plot-border-size",       { .value=&style.PlotBorderSize,     .min=0.0F, .max=2.0F,    .needsScaling=true  } },
+                        { "minor-alpha",            { .value=&style.MinorAlpha,         .min=0.0F, .max=1.0F,    .needsScaling=false } },
+                        { "major-tick-len",         { .value=&style.MajorTickLen,       .min=0.0F, .max=20.0F,   .needsScaling=true  } },
+                        { "minor-tick-len",         { .value=&style.MinorTickLen,       .min=0.0F, .max=20.0F,   .needsScaling=true  } },
+                        { "major-tick-size",        { .value=&style.MajorTickSize,      .min=0.0F, .max=2.0F,    .needsScaling=true  } },
+                        { "minor-tick-size",        { .value=&style.MinorTickSize,      .min=0.0F, .max=2.0F,    .needsScaling=true  } },
+                        { "major-grid-size",        { .value=&style.MajorGridSize,      .min=0.0F, .max=2.0F,    .needsScaling=true  } },
+                        { "minor-grid-size",        { .value=&style.MinorGridSize,      .min=0.0F, .max=2.0F,    .needsScaling=true  } },
+                        { "plot-padding",           { .value=&style.PlotPadding,        .min=0.0F, .max=20.0F,   .needsScaling=true  } },
+                        { "label-padding",          { .value=&style.LabelPadding,       .min=0.0F, .max=20.0F,   .needsScaling=true  } },
+                        { "legend-padding",         { .value=&style.LegendPadding,      .min=0.0F, .max=20.0F,   .needsScaling=true  } },
+                        { "legend-inner-padding",   { .value=&style.LegendInnerPadding, .min=0.0F, .max=10.0F,   .needsScaling=true  } },
+                        { "legend-spacing",         { .value=&style.LegendSpacing,      .min=0.0F, .max=5.0F,    .needsScaling=true  } },
+                        { "mouse-pos-padding",      { .value=&style.MousePosPadding,    .min=0.0F, .max=20.0F,   .needsScaling=true  } },
+                        { "annotation-padding",     { .value=&style.AnnotationPadding,  .min=0.0F, .max=5.0F,    .needsScaling=true  } },
+                        { "fit-padding",            { .value=&style.FitPadding,         .min=0.0F, .max=0.2F,    .needsScaling=true  } },
+                        { "plot-default-size",      { .value=&style.PlotDefaultSize,    .min=0.0F, .max=1000.0F, .needsScaling=true  } },
+                        { "plot-min-size",          { .value=&style.PlotMinSize,        .min=0.0F, .max=300.0F,  .needsScaling=true  } },
                 };
 
                 ThemeManager::addStyleHandler("implot", ImPlotStyleMap);
@@ -329,21 +375,21 @@ namespace hex::plugin::builtin {
             {
                 auto &style = ImNodes::GetStyle();
                 const static ThemeManager::StyleMap ImNodesStyleMap = {
-                        { "grid-spacing",                  { &style.GridSpacing,               0.0F,    100.0F, true } },
-                        { "node-corner-rounding",          { &style.NodeCornerRounding,        0.0F,    12.0F,  true } },
-                        { "node-padding",                  { &style.NodePadding,               0.0F,    20.0F,  true } },
-                        { "node-border-thickness",         { &style.NodeBorderThickness,       0.0F,    1.0F,   true } },
-                        { "link-thickness",                { &style.LinkThickness,             0.0F,    10.0F,  true } },
-                        { "link-line-segments-per-length", { &style.LinkLineSegmentsPerLength, 0.0F,    2.0F,   true } },
-                        { "link-hover-distance",           { &style.LinkHoverDistance,         0.0F,    20.0F,  true } },
-                        { "pin-circle-radius",             { &style.PinCircleRadius,           0.0F,    20.0F,  true } },
-                        { "pin-quad-side-length",          { &style.PinQuadSideLength,         0.0F,    20.0F,  true } },
-                        { "pin-triangle-side-length",      { &style.PinTriangleSideLength,     0.0F,    20.0F,  true } },
-                        { "pin-line-thickness",            { &style.PinLineThickness,          0.0F,    5.0F,   true } },
-                        { "pin-hover-radius",              { &style.PinHoverRadius,            0.0F,    20.0F,  true } },
-                        { "pin-offset",                    { &style.PinOffset,                 -10.0F,  10.0F,  true } },
-                        { "mini-map-padding",              { &style.MiniMapPadding,            0.0F,    20.0F,  true } },
-                        { "mini-map-offset",               { &style.MiniMapOffset,             -10.0F,  10.0F,  true } },
+                        { "grid-spacing",                  { .value=&style.GridSpacing,               .min=0.0F,    .max=100.0F, .needsScaling=true } },
+                        { "node-corner-rounding",          { .value=&style.NodeCornerRounding,        .min=0.0F,    .max=12.0F,  .needsScaling=true } },
+                        { "node-padding",                  { .value=&style.NodePadding,               .min=0.0F,    .max=20.0F,  .needsScaling=true } },
+                        { "node-border-thickness",         { .value=&style.NodeBorderThickness,       .min=0.0F,    .max=1.0F,   .needsScaling=true } },
+                        { "link-thickness",                { .value=&style.LinkThickness,             .min=0.0F,    .max=10.0F,  .needsScaling=true } },
+                        { "link-line-segments-per-length", { .value=&style.LinkLineSegmentsPerLength, .min=0.0F,    .max=2.0F,   .needsScaling=true } },
+                        { "link-hover-distance",           { .value=&style.LinkHoverDistance,         .min=0.0F,    .max=20.0F,  .needsScaling=true } },
+                        { "pin-circle-radius",             { .value=&style.PinCircleRadius,           .min=0.0F,    .max=20.0F,  .needsScaling=true } },
+                        { "pin-quad-side-length",          { .value=&style.PinQuadSideLength,         .min=0.0F,    .max=20.0F,  .needsScaling=true } },
+                        { "pin-triangle-side-length",      { .value=&style.PinTriangleSideLength,     .min=0.0F,    .max=20.0F,  .needsScaling=true } },
+                        { "pin-line-thickness",            { .value=&style.PinLineThickness,          .min=0.0F,    .max=5.0F,   .needsScaling=true } },
+                        { "pin-hover-radius",              { .value=&style.PinHoverRadius,            .min=0.0F,    .max=20.0F,  .needsScaling=true } },
+                        { "pin-offset",                    { .value=&style.PinOffset,                 .min=-10.0F,  .max=10.0F,  .needsScaling=true } },
+                        { "mini-map-padding",              { .value=&style.MiniMapPadding,            .min=0.0F,    .max=20.0F,  .needsScaling=true } },
+                        { "mini-map-offset",               { .value=&style.MiniMapOffset,             .min=-10.0F,  .max=10.0F,  .needsScaling=true } },
                 };
 
                 ThemeManager::addStyleHandler("imnodes", ImNodesStyleMap);
@@ -352,8 +398,8 @@ namespace hex::plugin::builtin {
             {
                 auto &style = ImGuiExt::GetCustomStyle();
                 const static ThemeManager::StyleMap ImHexStyleMap = {
-                        { "window-blur",    { &style.WindowBlur,    0.0F,   1.0F,   true } },
-                        { "popup-alpha",            { &style.PopupWindowAlpha,          0.0F,   1.0F,    false } },
+                        { "window-blur",    { .value=&style.WindowBlur,    .min=0.0F,   .max=1.0F,   .needsScaling=true } },
+                        { "popup-alpha",            { .value=&style.PopupWindowAlpha,          .min=0.0F,   .max=1.0F,    .needsScaling=false } },
                 };
 
                 ThemeManager::addStyleHandler("imhex", ImHexStyleMap);

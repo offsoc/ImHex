@@ -12,6 +12,7 @@ namespace hex::plugin::builtin {
         ~ViewTutorials() override = default;
 
         void drawContent() override;
+        void drawHelpText() override;
 
         [[nodiscard]] bool shouldDraw() const override { return true; }
         [[nodiscard]] bool hasViewMenuItemEntry() const override { return false; }
@@ -25,7 +26,7 @@ namespace hex::plugin::builtin {
         }
 
         ImGuiWindowFlags getWindowFlags() const override {
-            return Floating::getWindowFlags() | ImGuiWindowFlags_NoResize;
+            return ImGuiWindowFlags_NoResize;
         }
 
     private:

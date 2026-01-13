@@ -1,4 +1,4 @@
-#include <hex/api/content_registry.hpp>
+#include <hex/api/content_registry/hex_editor.hpp>
 
 #include <imgui.h>
 #include <hex/ui/imgui_imhex_extensions.h>
@@ -39,8 +39,8 @@ namespace hex::plugin::builtin {
         constexpr static auto ByteCount = sizeof(T);
         constexpr static auto CharCount = ByteCount * 2;
 
-        const static inline auto FormattingUpperCase = hex::format("%0{}{}X", CharCount, ImGuiExt::getFormatLengthSpecifier<T>());
-        const static inline auto FormattingLowerCase = hex::format("%0{}{}x", CharCount, ImGuiExt::getFormatLengthSpecifier<T>());
+        const static inline auto FormattingUpperCase = fmt::format("%0{}{}X", CharCount, ImGuiExt::getFormatLengthSpecifier<T>());
+        const static inline auto FormattingLowerCase = fmt::format("%0{}{}x", CharCount, ImGuiExt::getFormatLengthSpecifier<T>());
 
         const char *getFormatString(bool upperCase) {
             if (upperCase)
@@ -90,11 +90,11 @@ namespace hex::plugin::builtin {
         }
 
     private:
-        constexpr static inline auto ByteCount = 1;
-        constexpr static inline auto CharCount = ByteCount * 2;
+        constexpr static auto ByteCount = 1;
+        constexpr static auto CharCount = ByteCount * 2;
 
-        const static inline auto FormattingUpperCase = hex::format("%0{}{}X", CharCount, ImGuiExt::getFormatLengthSpecifier<u8>());
-        const static inline auto FormattingLowerCase = hex::format("%0{}{}x", CharCount, ImGuiExt::getFormatLengthSpecifier<u8>());
+        const static inline auto FormattingUpperCase = fmt::format("%0{}{}X", CharCount, ImGuiExt::getFormatLengthSpecifier<u8>());
+        const static inline auto FormattingLowerCase = fmt::format("%0{}{}x", CharCount, ImGuiExt::getFormatLengthSpecifier<u8>());
 
         static const char *getFormatString(bool upperCase) {
             if (upperCase)
@@ -139,7 +139,7 @@ namespace hex::plugin::builtin {
         constexpr static auto ByteCount = sizeof(T);
         constexpr static auto CharCount = std::numeric_limits<T>::digits10 + 2;
 
-        const static inline auto FormatString = hex::format("%{}{}{}", CharCount, ImGuiExt::getFormatLengthSpecifier<T>(), std::is_signed_v<T> ? "d" : "u");
+        const static inline auto FormatString = fmt::format("%{}{}{}", CharCount, ImGuiExt::getFormatLengthSpecifier<T>(), std::is_signed_v<T> ? "d" : "u");
 
         const char *getFormatString() {
             return FormatString.c_str();
@@ -175,13 +175,13 @@ namespace hex::plugin::builtin {
         }
 
     private:
-        constexpr static inline auto ByteCount = sizeof(T);
-        constexpr static inline auto CharCount = 14;
+        constexpr static auto ByteCount = sizeof(T);
+        constexpr static auto CharCount = 14;
 
-        const static inline auto FormatStringUpperCase = hex::format("%{}G", CharCount);
-        const static inline auto FormatStringLowerCase = hex::format("%{}g", CharCount);
+        const static inline auto FormatStringUpperCase = fmt::format("%{}G", CharCount);
+        const static inline auto FormatStringLowerCase = fmt::format("%{}g", CharCount);
 
-        const char *getFormatString(bool upperCase) const {
+        [[nodiscard]] const char *getFormatString(bool upperCase) const {
             if (upperCase)
                 return FormatStringUpperCase.c_str();
             else
@@ -214,8 +214,8 @@ namespace hex::plugin::builtin {
         constexpr static auto ByteCount = sizeof(Float16);
         constexpr static auto CharCount = 14;
 
-        const static inline auto FormatStringUpperCase = hex::format("%{}G", CharCount);
-        const static inline auto FormatStringLowerCase = hex::format("%{}g", CharCount);
+        const static inline auto FormatStringUpperCase = fmt::format("%{}G", CharCount);
+        const static inline auto FormatStringLowerCase = fmt::format("%{}g", CharCount);
 
         static const char *getFormatString(bool upperCase) {
             if (upperCase)
@@ -285,7 +285,7 @@ namespace hex::plugin::builtin {
             std::ignore = startedEditing;
 
             if (startedEditing) {
-                m_inputBuffer = hex::format("{:08b}", *data);
+                m_inputBuffer = fmt::format("{:08b}", *data);
             }
 
             if (drawDefaultTextEditingTextBox(address, m_inputBuffer, ImGuiInputTextFlags_None)) {

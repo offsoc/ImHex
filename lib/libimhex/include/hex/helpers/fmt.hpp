@@ -5,11 +5,8 @@
 #include <fmt/ranges.h>
 #include <fmt/ostream.h>
 
-namespace hex {
+#include <fmt/format.h>
 
-    template<typename... Args>
-    std::string format(std::string_view format, Args... args) {
-        return fmt::format(fmt::runtime(format), args...);
-    }
-
-}
+#if !defined(LIBWOLV_BUILTIN_UINT128)
+    #include <pl/helpers/types.hpp>
+#endif

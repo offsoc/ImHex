@@ -33,13 +33,13 @@ namespace hex::plugin::visualizers {
             height = u64(arguments[2].toUnsigned());
 
             auto iterable = dynamic_cast<pl::ptrn::IIterable*>(pattern.get());
-            iterable->forEachEntry(0, iterable->getEntryCount(), [&](u64, pl::ptrn::Pattern *entry) {
+            iterable->forEachEntry(0, iterable->getEntryCount(), [&](u64, const auto &entry) {
                 tableContent.push_back(entry->toString());
             });
         }
 
         if (width >= IMGUI_TABLE_MAX_COLUMNS)
-            throw std::logic_error(hex::format("Table visualizer cannot have more than {} columns.", IMGUI_TABLE_MAX_COLUMNS));
+            throw std::logic_error(fmt::format("Table visualizer cannot have more than {} columns.", IMGUI_TABLE_MAX_COLUMNS));
 
         if (ImGui::BeginTable("##visualizer_table", width, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
             for (u64 i = 0; i < height; i += 1) {

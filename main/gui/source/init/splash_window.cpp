@@ -1,13 +1,12 @@
 #include "window.hpp"
 #include "init/splash_window.hpp"
 
-#include <hex/api/imhex_api.hpp>
+#include <hex/api/imhex_api/system.hpp>
 #include <hex/api/events/requests_lifecycle.hpp>
 
 #include <hex/helpers/utils.hpp>
 #include <hex/helpers/fmt.hpp>
 #include <hex/helpers/logger.hpp>
-#include <fmt/chrono.h>
 
 #include <romfs/romfs.hpp>
 
@@ -34,39 +33,77 @@ namespace hex::init {
     
     constexpr static auto WindowSize = ImVec2(640, 400);
 
-    struct GlfwError {
+    static struct GlfwError {
         int errorCode = 0;
         std::string desc;
-    };
-
-    GlfwError lastGlfwError;
+    } s_lastGlfwError;
 
     WindowSplash::WindowSplash() : m_window(nullptr) {
+        RequestAddInitTask::subscribe([this](const std::string& name, bool async, const TaskFunction &function){
+            std::scoped_lock guard(m_progressMutex);
+
+            m_tasks.push_back(Task{ .name=name, .callback=function, .async=async, .running=false });
+            m_totalTaskCount += 1;
+            m_progress = float(m_completedTaskCount) / float(m_totalTaskCount);
+        });
+
+        if (const auto env = hex::getEnvironmentVariable("IMHEX_SKIP_SPLASH_SCREEN"); env.has_value() && !env.value().empty() && env.value() != "0") {
+            // Create a dummy ImGui context so plugins can initialize properly
+            ImGui::CreateContext();
+            return;
+        }
+
         this->initGLFW();
         this->initImGui();
         this->loadAssets();
 
         {
-            auto glVendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
-            auto glRenderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
-            auto glVersion = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+            auto glVendorString = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
+            auto glRendererString = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
+            auto glVersionString = reinterpret_cast<const char *>(glGetString(GL_VERSION));
             auto glShadingLanguageVersion = reinterpret_cast<const char *>(glGetString(GL_SHADING_LANGUAGE_VERSION));
 
-            log::debug("OpenGL Vendor: '{}'", glVendor);
-            log::debug("OpenGL Renderer: '{}'", glRenderer);
-            log::debug("OpenGL Version: '{}'", glVersion);
+            log::debug("OpenGL Vendor: '{}'", glVendorString);
+            log::debug("OpenGL Renderer: '{}'", glRendererString);
+            log::debug("OpenGL Version String: '{}'", glVersionString);
             log::debug("OpenGL Shading Language Version: '{}'", glShadingLanguageVersion);
 
-            ImHexApi::System::impl::setGPUVendor(glVendor);
-            ImHexApi::System::impl::setGLRenderer(glRenderer);
-        }
+            ImHexApi::System::impl::setGPUVendor(glVendorString);
+            ImHexApi::System::impl::setGLRenderer(glRendererString);
 
-        RequestAddInitTask::subscribe([this](const std::string& name, bool async, const TaskFunction &function){
-            m_tasks.push_back(Task{ name, function, async, false });
-        });
+            {
+                int glVersionMajor = 0, glVersionMinor = 0;
+                glGetIntegerv(GL_MAJOR_VERSION, &glVersionMajor);
+                glGetIntegerv(GL_MINOR_VERSION, &glVersionMinor);
+                log::debug("OpenGL Version: v{}.{}", glVersionMajor, glVersionMinor);
+                ImHexApi::System::impl::setGLVersion(SemanticVersion(glVersionMajor, glVersionMinor, 0));
+            }
+
+            {
+                #if defined(OS_MACOS)
+                    const static auto MinGLVersion = SemanticVersion(3, 2, 0);
+                #elif defined(OS_WEB)
+                    const static auto MinGLVersion = SemanticVersion(3, 0, 0);
+                #else
+                    const static auto MinGLVersion = SemanticVersion(3, 1, 0);
+                #endif
+
+                const auto &glVersion = ImHexApi::System::getGLVersion();
+                if (glVersion < MinGLVersion) {
+                    showErrorMessageBox(fmt::format("ImHex requires at least OpenGL {} to run but your system seems to only support up to OpenGL {}!\n\nTry upgrading your GPU drivers or try one of the NoGPU releases to use software rendering instead.", MinGLVersion.get(false), glVersion.get()));
+                    this->exitImGui();
+                    this->exitGLFW();
+                    std::exit(EXIT_FAILURE);
+                }
+            }
+        }
     }
 
     WindowSplash::~WindowSplash() {
+        if (m_window == nullptr) {
+            ImGui::DestroyContext();
+            return;
+        }
         // Clear textures before deinitializing glfw
         m_splashBackgroundTexture.reset();
         m_splashTextTexture.reset();
@@ -77,6 +114,13 @@ namespace hex::init {
 
 
     static void centerWindow(GLFWwindow *window) {
+        // Wayland does not allow applications to set the position of their windows
+        // so we skip centering the splash screen to avoid error message spamming
+        #if (GLFW_VERSION_MAJOR * 1000 + GLFW_VERSION_MINOR * 100 + GLFW_VERSION_REVISION) >= 3400
+            if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND)
+                return;
+        #endif
+
         // Get the primary monitor
         GLFWmonitor *monitor = glfwGetPrimaryMonitor();
         if (!monitor)
@@ -166,13 +210,14 @@ namespace hex::init {
                 // Save an iterator to the current task name
                 decltype(m_currTaskNames)::iterator taskNameIter;
                 {
-                    std::lock_guard guard(m_progressMutex);
+                    std::scoped_lock guard(m_progressMutex);
                     m_currTaskNames.push_back(task.name + "...");
                     taskNameIter = std::prev(m_currTaskNames.end());
                 }
 
                 // When the task finished, increment the progress bar
                 ON_SCOPE_EXIT {
+                    std::scoped_lock guard(m_progressMutex);
                     m_completedTaskCount += 1;
                     m_progress = float(m_completedTaskCount) / float(m_totalTaskCount);
                 };
@@ -194,7 +239,7 @@ namespace hex::init {
 
                 // Erase the task name from the list of running tasks
                 {
-                    std::lock_guard guard(m_progressMutex);
+                    std::scoped_lock guard(m_progressMutex);
                     m_currTaskNames.erase(taskNameIter);
                 }
             } catch (const std::exception &e) {
@@ -205,8 +250,6 @@ namespace hex::init {
                 m_taskStatus = false;
             }
         };
-
-        m_totalTaskCount += 1;
 
         // If the task can be run asynchronously, run it in a separate thread
         // otherwise run it in this thread and wait for it to finish
@@ -226,14 +269,14 @@ namespace hex::init {
 
             auto startTime = std::chrono::high_resolution_clock::now();
 
-            // Check every 100ms if all tasks have run
+            // Check every 10ms if all tasks have run
             while (true) {
                 // Loop over all registered init tasks
-                for (auto it = m_tasks.begin(); it != m_tasks.end(); ++it) {
+                for (auto & m_task : m_tasks) {
                     // Construct a new task callback
-                    if (!it->running) {
-                        this->createTask(*it);
-                        it->running = true;
+                    if (!m_task.running) {
+                        this->createTask(m_task);
+                        m_task.running = true;
                     }
                 }
 
@@ -243,7 +286,7 @@ namespace hex::init {
                         break;
                 }
 
-                std::this_thread::sleep_for(100ms);
+                std::this_thread::sleep_for(10ms);
             }
 
             auto endTime = std::chrono::high_resolution_clock::now();
@@ -252,6 +295,7 @@ namespace hex::init {
             log::info("ImHex fully started in {}ms", milliseconds);
 
             // Small extra delay so the last progress step is visible
+            m_progressLerp = 1.0F;
             std::this_thread::sleep_for(100ms);
 
             return m_taskStatus.load();
@@ -259,7 +303,10 @@ namespace hex::init {
     }
 
 
-    FrameResult WindowSplash::fullFrame() {
+    void WindowSplash::fullFrame() {
+        if (m_window == nullptr)
+            return;
+
         glfwSetWindowSize(m_window, WindowSize.x, WindowSize.y);
         centerWindow(m_window);
 
@@ -275,7 +322,7 @@ namespace hex::init {
         {
 
             // Draw the splash screen background
-            drawList->AddImage(this->m_splashBackgroundTexture, ImVec2(0, 0), WindowSize);
+            drawList->AddImage(m_splashBackgroundTexture, ImVec2(0, 0), WindowSize);
 
             {
 
@@ -288,12 +335,11 @@ namespace hex::init {
 
                     constexpr auto HexCount = ImVec2(13, 7);
 
-                    bool isStart = true;
-
                     color.Value.w *= opacity;
 
                     // Loop over all the bytes on the splash screen
                     for (u32 y = u32(start.y); y < u32(HexCount.y); y += 1) {
+                        bool isStart = true;
                         for (u32 x = u32(start.x); x < u32(HexCount.x); x += 1) {
                             if (count-- == 0)
                                 return;
@@ -315,7 +361,7 @@ namespace hex::init {
                             }
 
                             // Add some extra color on the right if this is the last byte
-                            if (count == 0) {
+                            if (count == 0 || x == u32(HexCount.x) - 1) {
                                 drawList->AddRectFilled(pos + ImVec2(hexSize.x, -hexSpacing.y / 2), pos + hexSize + hexSpacing / 2, color);
                             }
                         }
@@ -325,24 +371,24 @@ namespace hex::init {
                 };
 
                 // Draw all highlights, slowly fading them in as the init tasks progress
-                for (const auto &highlight : this->m_highlights)
-                    highlightBytes(highlight.start, highlight.count, highlight.color, this->m_progressLerp);
+                for (const auto &highlight : m_highlights)
+                    highlightBytes(highlight.start, highlight.count, highlight.color, m_progressLerp);
             }
 
-            this->m_progressLerp += (m_progress - this->m_progressLerp) * 0.1F;
+            m_progressLerp += (m_progress - m_progressLerp) * 0.2F;
 
             // Draw the splash screen foreground
-            drawList->AddImage(this->m_splashTextTexture, ImVec2(0, 0), WindowSize);
+            drawList->AddImage(m_splashTextTexture, ImVec2(0, 0), WindowSize);
 
             // Draw the "copyright" notice
-            drawList->AddText(ImVec2(35, 85), ImColor(0xFF, 0xFF, 0xFF, 0xFF), hex::format("WerWolv\n2020 - {0}", &__DATE__[7]).c_str());
+            drawList->AddText(ImVec2(35, 85), ImColor(0xFF, 0xFF, 0xFF, 0xFF), fmt::format("WerWolv\n2020 - {0}", &__DATE__[7]).c_str());
 
             // Draw version information
             // In debug builds, also display the current commit hash and branch
             #if defined(DEBUG)
-                const static auto VersionInfo = hex::format("{0} : {1}@{2}", ImHexApi::System::getImHexVersion().get(), ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash());
+                const static auto VersionInfo = fmt::format("{0} : {1}@{2}", ImHexApi::System::getImHexVersion().get(), ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash());
             #else
-                const static auto VersionInfo = hex::format("{0}", ImHexApi::System::getImHexVersion().get());
+                const static auto VersionInfo = fmt::format("{0}", ImHexApi::System::getImHexVersion().get());
             #endif
 
             drawList->AddText(ImVec2((WindowSize.x - ImGui::CalcTextSize(VersionInfo.c_str()).x) / 2, 105), ImColor(0xFF, 0xFF, 0xFF, 0xFF), VersionInfo.c_str());
@@ -350,23 +396,21 @@ namespace hex::init {
 
         // Draw the task progress bar
         {
-            std::lock_guard guard(m_progressMutex);
+            std::scoped_lock guard(m_progressMutex);
 
             const auto progressBackgroundStart = ImVec2(99, 357);
             const auto progressBackgroundSize = ImVec2(442, 30);
 
             const auto progressStart = progressBackgroundStart + ImVec2(0, 20);
-            const auto progressSize = ImVec2(progressBackgroundSize.x * m_progress, 10);
+            const auto progressSize = ImVec2(progressBackgroundSize.x * m_progressLerp, 10);
 
             // Draw progress bar
             drawList->AddRectFilled(progressStart, progressStart + progressSize, 0xD0FFFFFF);
 
             // Draw task names separated by | characters
-            if (!m_currTaskNames.empty()) {
-                drawList->PushClipRect(progressBackgroundStart, progressBackgroundStart + progressBackgroundSize, true);
-                drawList->AddText(progressStart + ImVec2(5, -20), ImColor(0xFF, 0xFF, 0xFF, 0xFF), hex::format("{}", fmt::join(m_currTaskNames, " | ")).c_str());
-                drawList->PopClipRect();
-            }
+            drawList->PushClipRect(progressBackgroundStart, progressBackgroundStart + progressBackgroundSize, true);
+            drawList->AddText(progressStart + ImVec2(5, -20), ImColor(0xFF, 0xFF, 0xFF, 0xFF), m_currTaskNames.empty() ? "Ready!" : fmt::format("{}", fmt::join(m_currTaskNames, " | ")).c_str());
+            drawList->PopClipRect();
         }
 
         // Render the frame
@@ -379,31 +423,24 @@ namespace hex::init {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(m_window);
+    }
+
+    std::optional<bool> WindowSplash::loop() {
+        // Splash window rendering loop
+        this->fullFrame();
 
         // Check if all background tasks have finished so the splash screen can be closed
-        if (this->m_tasksSucceeded.wait_for(0s) == std::future_status::ready) {
-            if (this->m_tasksSucceeded.get()) {
+        if (m_tasksSucceeded.wait_for(0s) == std::future_status::ready) {
+            if (m_tasksSucceeded.get()) {
                 log::debug("All tasks finished successfully!");
-                return FrameResult::Success;
+                return true;
             } else {
                 log::warn("All tasks finished, but some failed");
-                return FrameResult::Failure;
+                return false;
             }
         }
 
-        return FrameResult::Running;
-    }
-
-    bool WindowSplash::loop() {
-        // Splash window rendering loop
-        while (true) {
-            auto frameResult = this->fullFrame();
-
-            if (frameResult == FrameResult::Success)
-                return true;
-            else if (frameResult == FrameResult::Failure)
-                return false;
-        }
+        return std::nullopt;
     }
 
     void WindowSplash::initGLFW() {
@@ -420,27 +457,10 @@ namespace hex::init {
                 return;
             }
 
-            lastGlfwError.errorCode = errorCode;
-            lastGlfwError.desc = std::string(desc);
-            log::error("GLFW Error [{}] : {}", errorCode, desc);
+            s_lastGlfwError.errorCode = errorCode;
+            s_lastGlfwError.desc = std::string(desc);
+            log::error("GLFW Error [{:05X}] : {}", errorCode, desc);
         });
-
-        if (!glfwInit()) {
-            log::fatal("Failed to initialize GLFW!");
-            std::exit(EXIT_FAILURE);
-        }
-
-        // Configure used OpenGL version
-        #if defined(OS_MACOS)
-            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-            glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-            glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
-            glfwWindowHint(GLFW_COCOA_GRAPHICS_SWITCHING, GLFW_TRUE);
-        #else
-            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-        #endif
 
 	#if defined(OS_LINUX)
         #if defined(GLFW_WAYLAND_APP_ID)
@@ -452,25 +472,30 @@ namespace hex::init {
         #endif
 
         glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
-	#endif
+	#elif defined(OS_MACOS)
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+
+        glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);
+        glfwWindowHint(GLFW_COCOA_GRAPHICS_SWITCHING, GLFW_TRUE);
+    #endif
 
         // Make splash screen non-resizable, undecorated and transparent
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
         glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
         glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
         glfwWindowHint(GLFW_FLOATING, GLFW_FALSE);
         glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
 
         // Create the splash screen window
-        m_window = glfwCreateWindow(1, 1, "Starting ImHex...", nullptr, nullptr);
+        m_window = glfwCreateWindow(WindowSize.x, WindowSize.y, "Starting ImHex...", nullptr, nullptr);
         if (m_window == nullptr) {
-            hex::nativeErrorMessage(hex::format(
+            hex::showErrorMessageBox(fmt::format(
                 "Failed to create GLFW window: [{}] {}.\n"
                 "You may not have a renderer available.\n"
                 "The most common cause of this is using a virtual machine\n"
                 "You may want to try a release artifact ending with 'NoGPU'"
-                , lastGlfwError.errorCode, lastGlfwError.desc));
+                , s_lastGlfwError.errorCode, s_lastGlfwError.desc));
             std::exit(EXIT_FAILURE);
         }
 
@@ -488,11 +513,7 @@ namespace hex::init {
             if (meanScale <= 0.0F)
                 meanScale = 1.0F;
 
-            #if defined(OS_WEB)
-                meanScale = 1.0F;
-            #endif
-
-            #if !defined(OS_LINUX)
+            #if !defined(OS_LINUX) && !defined(OS_WEB)
                 meanScale /= hex::ImHexApi::System::getBackingScaleFactor();
             #endif
 
@@ -520,7 +541,7 @@ namespace hex::init {
             ImGui_ImplOpenGL3_Init();
             ImGui_ImplGlfw_InstallEmscriptenCallbacks(m_window, "#canvas");
         #else
-            ImGui_ImplOpenGL3_Init("#version 410");
+            ImGui_ImplOpenGL3_Init("#version 130");
         #endif
 
         auto &io = ImGui::GetIO();
@@ -533,9 +554,7 @@ namespace hex::init {
 
             ImFontConfig cfg;
             cfg.OversampleH = cfg.OversampleV = 1, cfg.PixelSnapH = true;
-            cfg.SizePixels = ImHexApi::Fonts::DefaultFontSize;
             io.Fonts->AddFontDefault(&cfg);
-            ImGui_ImplOpenGL3_CreateFontsTexture();
         }
 
         // Don't save window settings for the splash screen
@@ -549,12 +568,12 @@ namespace hex::init {
 
         // Load splash screen image from romfs
         const auto backingScale = ImHexApi::System::getNativeScale();
-        this->m_splashBackgroundTexture = ImGuiExt::Texture::fromSVG(romfs::get("splash_background.svg").span(), WindowSize.x * backingScale, WindowSize.y * backingScale, ImGuiExt::Texture::Filter::Linear);
-        this->m_splashTextTexture = ImGuiExt::Texture::fromSVG(romfs::get("splash_text.svg").span(), WindowSize.x * backingScale, WindowSize.y * backingScale, ImGuiExt::Texture::Filter::Linear);
+        m_splashBackgroundTexture = ImGuiExt::Texture::fromSVG(romfs::get("splash_background.svg").span(), WindowSize.x * backingScale, WindowSize.y * backingScale, ImGuiExt::Texture::Filter::Linear);
+        m_splashTextTexture = ImGuiExt::Texture::fromSVG(romfs::get("splash_text.svg").span(), WindowSize.x * backingScale, WindowSize.y * backingScale, ImGuiExt::Texture::Filter::Linear);
 
         // If the image couldn't be loaded correctly, something went wrong during the build process
         // Close the application since this would lead to errors later on anyway.
-        if (!this->m_splashBackgroundTexture.isValid() || !this->m_splashTextTexture.isValid()) {
+        if (!m_splashBackgroundTexture.isValid() || !m_splashTextTexture.isValid()) {
             log::error("Could not load splash screen image!");
         }
 
@@ -563,11 +582,11 @@ namespace hex::init {
         u32 lastPos = 0;
         u32 lastCount = 0;
         u32 index = 0;
-        for (auto &highlight : this->m_highlights) {
+        for (auto &highlight : m_highlights) {
             u32 newPos = lastPos + lastCount + (rng() % 35);
             u32 newCount = (rng() % 7) + 3;
-            highlight.start.x = float(newPos % 13);
-            highlight.start.y = float(newPos / 13);
+            highlight.start.x = newPos % 13;
+            highlight.start.y = int(newPos / 13);
             highlight.count = newCount;
 
             highlight.color = getHighlightColor(index);
@@ -578,14 +597,20 @@ namespace hex::init {
         }
     }
 
-    void WindowSplash::startStartupTasks() {
+    void WindowSplash::addStartupTask(const std::string &taskName, const TaskFunction &function, bool async) {
+        std::scoped_lock lock(m_tasksMutex);
+
+        m_tasks.emplace_back(taskName, function, async);
+        m_totalTaskCount += 1;
+    }
+
+    void WindowSplash::startStartupTaskExecution() {
         // Launch init tasks in the background
-        this->m_tasksSucceeded = processTasksAsync();
+        m_tasksSucceeded = processTasksAsync();
     }
 
     void WindowSplash::exitGLFW() const {
         glfwDestroyWindow(m_window);
-        glfwTerminate();
     }
 
     void WindowSplash::exitImGui() const {
